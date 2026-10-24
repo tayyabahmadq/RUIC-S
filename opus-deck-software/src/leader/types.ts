@@ -85,7 +85,7 @@ export interface Conflict {
   path: string
   taskId: string
   heldBy: string[]
-  resolution?: 'rerouted' | 'split'
+  resolution?: 'rerouted' | 'split' | 'requeued'
   resolvedAt?: string
   detail?: string
 }
@@ -93,7 +93,7 @@ export interface Conflict {
 export interface Conflicts {
   record(path: string, taskId: string, heldBy: string[]): Promise<string>
   list(): Promise<Conflict[]>
-  resolve(id: string, resolution: 'rerouted' | 'split', detail?: string): Promise<void>
+  resolve(id: string, resolution: 'rerouted' | 'split' | 'requeued', detail?: string): Promise<void>
 }
 
 export interface BusEvent { id: string; type: string; payload: unknown; at: string }

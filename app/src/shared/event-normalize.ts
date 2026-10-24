@@ -246,6 +246,46 @@ export function normalizeHubEvent(type: string, payload: unknown, ctx: Normalize
       }, ctx)
     }
 
+    case 'laya.routed': {
+      const decision = p['decision']
+      const score = asNumber(p['score'])
+      const reasons = asStringArray(p['reasons'])
+      if ((decision !== 'local' && decision !== 'decompose') || score === undefined || reasons === undefined) return null
+      return make('laya.routed', { runId: asString(p['runId']) ?? ctx.runId, decision, score, reasons }, ctx)
+    }
+
+    case 'zeak.fallback': {
+      const from = asString(p['from'])
+      const to = asString(p['to'])
+      const reason = asString(p['reason'])
+      if (from === undefined || to === undefined || reason === undefined) return null
+      const taskId = asString(p['taskId']) ?? null
+      return make('zeak.fallback', { runId: asString(p['runId']) ?? ctx.runId, taskId, from, to, reason }, ctx)
+    }
+
+    case 'zeak.early_stop': {
+      const chunks = asNumber(p['chunks'])
+      if (chunks === undefined) return null
+      const taskId = asString(p['taskId']) ?? null
+      return make('zeak.early_stop', { runId: asString(p['runId']) ?? ctx.runId, taskId, chunks }, ctx)
+    }
+
+    case 'zeak.escalation': {
+      const to = asString(p['to'])
+      const attempt = asNumber(p['attempt'])
+      if (to === undefined || attempt === undefined) return null
+      const taskId = asString(p['taskId']) ?? null
+      return make('zeak.escalation', { runId: asString(p['runId']) ?? ctx.runId, taskId, to, attempt }, ctx)
+    }
+
+    case 'collector.collected': {
+      const topic = asString(p['topic'])
+      const count = asNumber(p['count'])
+      const via = asString(p['via'])
+      if (topic === undefined || count === undefined || via === undefined) return null
+      return make('collector.collected', { runId: asString(p['runId']) ?? ctx.runId, topic, count, via }, ctx)
+    }
+
     case 'codegraph.rebuilt': {
       return make('codegraph.rebuilt', {
         files: asNumber(p['files']) ?? 0,

@@ -154,6 +154,22 @@ export interface CrewDependencies {
    * at the transport layer, so the worker never double-counts.
    */
   readonly usageSink?: (usage: StreamUsage) => void
+  /**
+   * Common-S: the State Contract exit-path writer. Every worker MUST write
+   * its compacted result to the Brain before exiting (the "write before you
+   * leave the desk" rule). Enforced at the exit path — done / blocked /
+   * handed_off — so a crashing worker still leaves a resume point. Absent =
+   * shipped behavior (no contract writes, e.g. legacy tests).
+   */
+  readonly contractWriter?: (input: {
+    taskId: string
+    status: 'done' | 'blocked' | 'handed_off' | 'in_progress'
+    owner: string
+    done?: string
+    remaining?: readonly string[]
+    decisions?: readonly string[]
+    artifacts?: readonly string[]
+  }) => Promise<void>
 }
 
 export interface CrewWorkerResult {

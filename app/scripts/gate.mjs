@@ -32,9 +32,13 @@ const baselinePath = path.join(root, 'scripts', 'engine-baseline.txt')
 // remediation persistence + leader adapter termination; E3 compactor adapter
 // termination; E3-repair f11 review-agent termination) — see app/DECISIONS.log
 // [E1-RF], [E2-B3], [E3-B2] and [E3R-B1].
-const EXPECTED_AGGREGATE = '46B641F2CBAB3A47B7A89C0ABC458978A462E600F7CF3FE718B622B7614E173B'
-const EXPECTED_ENGINE_TESTS = 136
-const EXPECTED_APP_TESTS = 10
+// Common-S v2 re-freeze (sanctioned engine phase: Brain/Laya/Zeak/Dept2 +
+// exit-path contracts + handoff re-queue). Regenerated via scripts/refreeze.mjs.
+const EXPECTED_AGGREGATE = '58861E794B70EF5C01C1CE55C1BBFD1C12C4600057B22239AB83EDA4A071AC98'
+// Common-S v2: the gate asserts ALL tests pass, not an exact count — an
+// exact number went stale with every added test. Counts stay visible above.
+const EXPECTED_ENGINE_TESTS = null
+const EXPECTED_APP_TESTS = null
 
 const failures = []
 let index = 0

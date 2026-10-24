@@ -41,7 +41,7 @@ export function initOpusDeck(config: OpusDeckConfig): OpusDeckRuntime {
     [DECISIONS, ''],
     [DIGEST, '# Digest\n\nOwned by the compactor.\n'],
     [PRESENCE, JSON.stringify({ updated: new Date().toISOString(), entries: [] }, null, 2) + '\n'],
-    [TASKS, JSON.stringify({ tasks: [] }, null, 2) + '\n'],
+    [TASKS, '[]\n'], // array: merge/verify-build requires task/claim rows
     [FINDINGS, JSON.stringify([]) + '\n'],
     [TXN_LOG, ''],
   ]

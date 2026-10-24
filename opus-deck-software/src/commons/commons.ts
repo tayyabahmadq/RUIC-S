@@ -179,7 +179,7 @@ export async function openCommons(memoryDir: string): Promise<Commons> {
     [COMMONS_PATHS.DECISIONS, ''],
     [COMMONS_PATHS.DIGEST, '# Digest\n\nOwned by the compactor.\n'],
     [COMMONS_PATHS.PRESENCE, JSON.stringify({ updated: isoNow(), entries: [] }, null, 2) + '\n'],
-    [COMMONS_PATHS.TASKS, JSON.stringify({ tasks: [] }, null, 2) + '\n'],
+    [COMMONS_PATHS.TASKS, '[]\n'], // array: merge/verify-build requires task/claim rows
     [COMMONS_PATHS.FINDINGS, JSON.stringify([]) + '\n'],
     [COMMONS_PATHS.TXN_LOG, ''],
   ]

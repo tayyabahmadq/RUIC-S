@@ -45,6 +45,7 @@ function reconstructState(events: readonly DeckEvent[]): ReconstructedState {
   let startedAt: string | null = null
   let endedAt: string | null = null
   let tokenInput = 0
+  const routingNotes: string[] = []
   let tokenOutput = 0
 
   for (const event of events) {
@@ -136,6 +137,21 @@ function reconstructState(events: readonly DeckEvent[]): ReconstructedState {
         // Preview state is tracked in dedicated variables (see below),
         // not in the reconstructed state.
         break
+      case 'laya.routed':
+        routingNotes.push(`Laya routed ${event.payload.decision} (score ${event.payload.score}): ${event.payload.reasons[0] ?? ''}`.trim())
+        break
+      case 'zeak.fallback':
+        routingNotes.push(`Zeak fallback ${event.payload.from} -> ${event.payload.to} (${event.payload.reason})`)
+        break
+      case 'zeak.early_stop':
+        routingNotes.push(`Zeak early-stop after ${event.payload.chunks} chunks (contract satisfied)`)
+        break
+      case 'zeak.escalation':
+        routingNotes.push(`Zeak re-escalated task to ${event.payload.to} (attempt ${event.payload.attempt})`)
+        break
+      case 'collector.collected':
+        routingNotes.push(`Collected ${event.payload.count} item(s) via ${event.payload.via}: ${event.payload.topic}`)
+        break
       default:
         break
     }
@@ -147,6 +163,7 @@ function reconstructState(events: readonly DeckEvent[]): ReconstructedState {
   return {
     runId,
     phase,
+    routingNotes,
     tasks: [...tasks.values()].sort(BT.compareTasks),
     findings: [...findings.values()].sort(BT.compareFindings),
     presence: [...presence.values()].sort(BT.comparePresence),
@@ -316,6 +333,33 @@ function render(): void {
     }
   }
 
+  // Common-S: routing + economic-layer visibility (Laya decisions, Zeak
+  // fallbacks/early-stops, Data Collection) render above the findings feed.
+  const strip = byId<HTMLElement>('phaseStrip')
+  if (strip !== null && deckState.routingNotes.length > 0) {
+    strip.title = deckState.routingNotes.join('\n')
+  }
+  const findingsSection = findingsList?.parentElement ?? null
+  if (findingsList !== null && findingsSection !== null) {
+    let routingBox = byId<HTMLElement>('routingFeed')
+    if (routingBox === null) {
+      routingBox = document.createElement('div')
+      routingBox.id = 'routingFeed'
+      routingBox.className = 'findings-list'
+      findingsSection.parentElement?.insertBefore(routingBox, findingsSection)
+    }
+    clearChildren(routingBox)
+    for (const note of deckState.routingNotes.slice(-20)) {
+      const item = document.createElement('div')
+      item.className = 'finding-item'
+      const msg = document.createElement('div')
+      msg.className = 'finding-msg'
+      msg.textContent = note
+      item.appendChild(msg)
+      routingBox.appendChild(item)
+    }
+  }
+
   /* ---- Preview surface (R16) ---- */
   const previewPanel = byId<HTMLElement>('previewPanel')
   const previewFileList = byId<HTMLElement>('previewFileList')
@@ -380,14 +424,23 @@ function render(): void {
  * ------------------------------------------------------------------ */
 
 function defaultCrew(): BridgeCrew {
+  // Common-S v2 roster: the local executor (Qwen via Ollama, free) is the
+  // default first engineer AND both security scanners (Dept 5 is free by
+  // design). The frontier lead stays paid — every call passes Zeak first.
+  const local = {
+    provider: 'openai-compatible' as const,
+    endpoint: 'http://localhost:11434/v1',
+    model: 'qwen2.5-coder:1.5b',
+    contextWindowTokens: 32768,
+  }
   return {
     lead: { id: 'lead', provider: 'openai-compatible', model: 'gpt-5', contextWindowTokens: 128000, speedClass: 'heavy' },
     engineers: [
-      { id: 'eng-1', provider: 'openai-compatible', model: 'gpt-5', contextWindowTokens: 128000, speedClass: 'standard' },
+      { id: 'eng-1', ...local, speedClass: 'standard' as const },
     ],
     security: [
-      { id: 'sec-1', provider: 'openai-compatible', model: 'gpt-5-mini', contextWindowTokens: 128000, speedClass: 'fast' },
-      { id: 'sec-2', provider: 'openai-compatible', model: 'claude-4', contextWindowTokens: 200000, speedClass: 'standard' },
+      { id: 'sec-1', ...local, speedClass: 'fast' as const },
+      { id: 'sec-2', ...local, speedClass: 'standard' as const },
     ],
   }
 }

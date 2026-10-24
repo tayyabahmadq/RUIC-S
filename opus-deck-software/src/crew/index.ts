@@ -8,7 +8,7 @@ export {
   getPromptTokenBudget,
   setPromptTokenBudget,
 } from './assemble-prompt.js'
-export { EngineerWorker, createEngineerWorker, f07SetDefaultSystemPrompt, f07GetDefaultSystemPrompt } from './worker.js'
+export { EngineerWorker, createEngineerWorker, f07SetDefaultSystemPrompt, f07GetDefaultSystemPrompt, f07SetDefaultContractWriter, f07GetDefaultContractWriter } from './worker.js'
 export { runCrew } from './pool.js'
 export { f07SetDefaultBus } from './default-bus.js'
 export {

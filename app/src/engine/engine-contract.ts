@@ -271,6 +271,8 @@ export interface EngineSignOff { checksum: string; fileCount: number; generatedA
 /** leader/leader.ts:36 Leader (surface the shell drives) */
 export interface EngineLeader {
   plan(input?: EnginePlanInput): Promise<EngineTask[]>
+  /** Common-S Laya local path: persist planner state without an LLM call. */
+  seedLocalPlan(input: { brief: string; goalState: string; crew: { lead: string; engineers: string[] }; tasks: EngineTask[] }): Promise<void>
   route(tasks?: EngineTask[]): Promise<void>
   verify(criteria?: string[]): Promise<EngineVerificationResult[]>
   signOff(): Promise<EngineSignOff>
@@ -342,6 +344,16 @@ export interface CrewDependencies {
   readonly transport?: CrewTransportClient
   readonly locks?: CrewLockClient
   readonly systemPrompt?: string
+  /** Common-S: the State Contract exit-path writer (Brain-backed). */
+  readonly contractWriter?: (input: {
+    taskId: string
+    status: 'done' | 'blocked' | 'handed_off' | 'in_progress'
+    owner: string
+    done?: string
+    remaining?: readonly string[]
+    decisions?: readonly string[]
+    artifacts?: readonly string[]
+  }) => Promise<void>
 }
 
 /** crew/types.ts:125 EngineerRef (a bare model id is accepted too) */
@@ -396,6 +408,15 @@ export interface EngineWireOptions {
   confirmationTtlMs?: number
   confirmationAutoIssue?: boolean
   gate?: { failOn?: Severity }
+  /** Common-S v2 (all optional — absent = shipped behavior). */
+  commonS?: {
+    embed?: (text: string) => Promise<number[]>
+    fallbackModelId?: string
+    departmentCaps?: Record<string, number>
+    escalationBudget?: number
+    cacheThreshold?: number
+    vectorCap?: number
+  }
 }
 
 /**
@@ -442,6 +463,29 @@ export interface WiredDeck {
   ): Promise<EngineRemediationResult>
   merge(memoryDir: string, outputDir: string): Promise<EngineManifest>
   persistFindings(findings: readonly EngineFinding[]): Promise<void>
+  /** Common-S v2: the Brain, Laya routing, Dept 2 collection, contract writer. */
+  brain: {
+    writeContract(input: {
+      taskId: string
+      status: 'done' | 'blocked' | 'handed_off' | 'in_progress'
+      owner: string
+      done?: string
+      remaining?: readonly string[]
+      decisions?: readonly string[]
+      artifacts?: readonly string[]
+      parentTaskId?: string | null
+    }): Promise<unknown>
+    getTaskFlags(taskId: string): Promise<Record<string, unknown>>
+    setTaskFlags(taskId: string, flags: Record<string, unknown>): Promise<void>
+    stats(): Promise<{ vectors: number; contracts: number }>
+  }
+  laya(input: { brief: string; goalState: readonly string[]; crewSize?: number }): Promise<{
+    decision: 'local' | 'decompose'
+    score: number
+    reasons: string[]
+  }>
+  collect(topic: string): Promise<{ servedFromCache: boolean; items: Array<{ title: string; body: string; source: string }> }>
+  contractWriter: NonNullable<CrewDependencies['contractWriter']>
 }
 
 /** wiring/index.ts:178 wireOpusDeck */

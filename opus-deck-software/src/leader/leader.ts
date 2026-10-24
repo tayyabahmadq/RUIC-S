@@ -100,6 +100,22 @@ export class Leader {
     }
   }
 
+  /**
+   * Common-S Laya local path: seed the planner's commons state WITHOUT an
+   * LLM call. A trivial brief is routed locally — the frontier planner is
+   * never invoked — but every downstream phase (route/verify/signOff/merge)
+   * reads the same commons keys plan() writes, so they must exist.
+   */
+  async seedLocalPlan(input: { brief: string; goalState: string; crew: Crew; tasks: Task[] }): Promise<void> {
+    const stored = await this.storedTasks()
+    if (stored.length > 0) return
+    await this.commons.write(BRIEF_KEY, input.brief)
+    await this.commons.write(GOAL_STATE_KEY, input.goalState)
+    await this.commons.write(CREW_KEY, input.crew)
+    await this.commons.write(TASKS_KEY, input.tasks)
+    await this.commons.append(LOG_KEY, { event: 'planned-local', taskCount: input.tasks.length, at: nowIso() })
+  }
+
   async route(tasks?: Task[]): Promise<void> {
     try {
       const list = tasks ?? (await this.storedTasks())
@@ -310,30 +326,22 @@ export class Leader {
         await this.conflicts.resolve(conflict.id, 'split', 'task not found; abandoned')
         continue
       }
-      const mid = Math.ceil(task.description.length / 2) || 1
-      const part1 = task.description.slice(0, mid).trim() || 'part 1'
-      const part2 = task.description.slice(mid).trim() || 'part 2'
-      const sub1: Task = { id: `T-${String(list.length + 1).padStart(2, '0')}`, path: `${conflict.path}.part-1`, description: part1, acceptance: ['Part 1 implemented and reviewed'] }
-      const sub2: Task = { id: `T-${String(list.length + 2).padStart(2, '0')}`, path: `${conflict.path}.part-2`, description: part2, acceptance: ['Part 2 implemented and reviewed'] }
-      for (const sub of [sub1, sub2]) {
-        const holders = await this.claims.holdersOf(sub.path)
-        const assignee = this.pickEngineer(crew.engineers, load, holders)
-        if (assignee !== undefined) {
-          assignments[sub.id] = assignee
-          load[assignee] += 1
-          await this.claims.claim(sub.id, sub.path, assignee)
-        }
+      // Common-S Dept 4 (pinned): no description slicing. A task whose
+      // executor failed is handed off WHOLE — the failing worker's Brain
+      // contract ('blocked'/'handed_off' + remaining) is the resume point.
+      // Release the claim and re-queue the intact task for another model.
+      await this.claims.release(conflict.taskId)
+      const assignee = this.pickEngineer(crew.engineers, load, [])
+      if (assignee !== undefined) {
+        assignments[conflict.taskId] = assignee
+        load[assignee] += 1
+        await this.claims.claim(conflict.taskId, conflict.path, assignee)
+        await this.conflicts.resolve(conflict.id, 'rerouted', `handoff: re-queued ${conflict.taskId} intact to ${assignee}`)
+      } else {
+        await this.conflicts.resolve(conflict.id, 'requeued', `no engineer free; ${conflict.taskId} stays claimable`)
       }
-      await this.replaceTaskInStore(task.id, [sub1, sub2])
-      await this.conflicts.resolve(conflict.id, 'split', `split into ${sub1.id} and ${sub2.id}`)
+      continue
     }
     await this.commons.write(ASSIGNMENTS_KEY, assignments)
-  }
-
-  private async replaceTaskInStore(removedId: string, replacements: Task[]): Promise<void> {
-    const current = await this.storedTasks()
-    const index = current.findIndex((t) => t.id === removedId)
-    const updated = index === -1 ? [...current, ...replacements] : [...current.slice(0, index), ...replacements, ...current.slice(index + 1)]
-    await this.commons.write(TASKS_KEY, updated)
   }
 }

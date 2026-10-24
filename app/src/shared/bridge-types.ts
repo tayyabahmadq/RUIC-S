@@ -36,6 +36,11 @@ export type BridgeEventName =
   | 'action.confirmed' | 'action.rejected'
   | 'codegraph.rebuilt'
   | 'preview.state'
+  | 'laya.routed'
+  | 'zeak.fallback'
+  | 'zeak.early_stop'
+  | 'zeak.escalation'
+  | 'collector.collected'
 
 export interface BridgeEventPayloads {
   'run.started': { runId: string; brief: string; goalState: string[] }
@@ -62,6 +67,11 @@ export interface BridgeEventPayloads {
   'compaction.done': { reason: string }
   'action.confirmed': { confirmationId: string; scope: string; action: string }
   'action.rejected': { reason: string; code: string; message: string }
+  'laya.routed': { runId: string; decision: string; score: number; reasons: string[] }
+  'zeak.fallback': { runId: string; taskId: string | null; from: string; to: string; reason: string }
+  'zeak.early_stop': { runId: string; taskId: string | null; chunks: number }
+  'zeak.escalation': { runId: string; taskId: string | null; to: string; attempt: number }
+  'collector.collected': { runId: string; topic: string; count: number; via: string }
   'codegraph.rebuilt': { files: number; clusters: number; hubs: number }
   'preview.state': { runId: string; open: boolean; currentFile: string | null; files: string[] }
 }
@@ -258,6 +268,7 @@ export interface ReconstructedState {
   readonly elapsedMs: number
   readonly startedAt: string | null
   readonly endedAt: string | null
+  readonly routingNotes: string[]
 }
 
 /* ================================================================== *
@@ -295,6 +306,7 @@ export function emptyState(): ReconstructedState {
     elapsedMs: 0,
     startedAt: null,
     endedAt: null,
+    routingNotes: [],
   }
 }
 
@@ -322,6 +334,7 @@ interface MutableState {
   readonly tasks: Map<string, ReconstructedTask>
   readonly findings: Map<string, ReconstructedFinding>
   readonly presence: Map<string, ReconstructedPresence>
+  routingNotes: string[]
 }
 
 function applyEvent(state: MutableState, event: DeckEvent): void {
@@ -400,6 +413,21 @@ function applyEvent(state: MutableState, event: DeckEvent): void {
       state.phase = 'failed'
       state.endedAt = event.at
       return
+    case 'laya.routed':
+      state.routingNotes.push(`Laya routed ${event.payload.decision} (score ${event.payload.score}): ${event.payload.reasons[0] ?? ''}`.trim())
+      return
+    case 'zeak.fallback':
+      state.routingNotes.push(`Zeak fallback ${event.payload.from} -> ${event.payload.to} (${event.payload.reason})`)
+      return
+    case 'zeak.early_stop':
+      state.routingNotes.push(`Zeak early-stop after ${event.payload.chunks} chunks (contract satisfied)`)
+      return
+    case 'zeak.escalation':
+      state.routingNotes.push(`Zeak re-escalated task to ${event.payload.to} (attempt ${event.payload.attempt})`)
+      return
+    case 'collector.collected':
+      state.routingNotes.push(`Collected ${event.payload.count} item(s) via ${event.payload.via}: ${event.payload.topic}`)
+      return
     default:
       return
   }
@@ -422,6 +450,7 @@ export function reconstructState(events: readonly DeckEvent[]): ReconstructedSta
     tasks: new Map(),
     findings: new Map(),
     presence: new Map(),
+    routingNotes: [],
   }
 
   const seen = new Set<string>()
@@ -447,5 +476,6 @@ export function reconstructState(events: readonly DeckEvent[]): ReconstructedSta
     elapsedMs,
     startedAt: state.startedAt,
     endedAt: state.endedAt,
+    routingNotes: [...state.routingNotes],
   }
 }

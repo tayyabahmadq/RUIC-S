@@ -18,7 +18,7 @@ export class ConflictsAdapter implements Conflicts {
     return [...this.byId.values()].map((c) => ({ ...c }))
   }
 
-  async resolve(id: string, resolution: 'rerouted' | 'split', detail?: string): Promise<void> {
+  async resolve(id: string, resolution: 'rerouted' | 'split' | 'requeued', detail?: string): Promise<void> {
     const conflict = this.byId.get(id)
     if (!conflict) throw new Error(`conflictsAdapter: unknown conflict ${id}`)
     conflict.resolution = resolution

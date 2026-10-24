@@ -45,7 +45,14 @@ function buildModelTransport(registry: EngineModelRegistry, ref: BridgeModelRef)
   if (endpoint === undefined) {
     throw new Error(`model "${ref.id}": provider "custom" requires an explicit endpoint`)
   }
-  const apiKeyEnv = process.env[envVarNameFor(ref.id)] ?? undefined
+  // Common-S: a local Ollama model needs no real key, but the engine's key
+  // resolution is mandatory — satisfy it with the OLLAMA_API_KEY env var
+  // (any value; Ollama ignores the Authorization header).
+  const isOllama = /(?:localhost|127\.0\.0\.1):11434/.test(endpoint)
+  if (isOllama && (process.env.OLLAMA_API_KEY ?? '').length === 0) {
+    process.env.OLLAMA_API_KEY = 'ollama-local'
+  }
+  const apiKeyEnv = process.env[envVarNameFor(ref.id)] ?? (isOllama ? 'OLLAMA_API_KEY' : undefined)
   registry.register({
     id: ref.id,
     provider: ref.provider,

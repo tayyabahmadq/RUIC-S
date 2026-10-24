@@ -10,6 +10,26 @@
 - All models share **one** memory directory — **COMMONS** ("unbounded shared memory, bounded per-model attention") — with a **COMPACTOR** that keeps each model's prompt small.
 - A **MERGE engine** gates and assembles the final output into an `OUTPUT/` folder with `MANIFEST.json` and `REPORT.md` (a full audit trail).
 
+## Common-S v2 — the architecture
+
+Ruic v2 implements the **Common-S Autonomous System**: a shared compacted Brain at the center, five departments around it, models as stateless swappable workers, Laya as the router, and Zeak as the cost gate.
+
+| Component | Implementation |
+|---|---|
+| **Common-S Super Brain** | The COMMONS store, three deep: `STATE/digest.md` (human-readable compacted state), `STATE/contracts.json` (the State Contract), `STATE/vectors.json` (semantic knowledge, RAM-capped, decayed by the Compactor) |
+| **State Contract v1.0.0** | Every model writes its compacted result to the Brain before exiting — `done` on completion, `blocked` + remaining on crash (a resume point survives), `handed_off` + remaining on bail (that write IS the handoff). Versioned from day one; readers reject unknown majors |
+| **Triangular Compaction Loop** | Fires after EVERY sub-task, serialized (never concurrent), atomic temp+rename writes on all three stores |
+| **Laya** | Deterministic code router: reads Brain state, scores complexity — trivial briefs run fully local (zero paid calls), heavy ones decompose through Dept 4. Open handoffs force orchestration |
+| **Dept 1 Engineering** | Laya + the local crew (intake/routing) |
+| **Dept 2 Data Collection** | Generic collector seam: GitHub-as-data-source (free REST, rate limit treated as a budget, back off on 403) and the Obscura Browser behind the same interface (one agent at a time, graceful degradation). Cache-gate first: repeat research is served from the Brain |
+| **Dept 3 Deep Thinking** | Frontier models (Sonnet/GPT-4o class), every call through Zeak, opt-in by complexity |
+| **Dept 4 Linking & Allocation** | Dependency-graph decomposition, assignments, handoff re-queue (a failing task changes hands whole — never sliced), stitching via `parentTaskId` |
+| **Dept 5 Security Check** | Diff-based scanning on the free local model; a Security rejection of a Zeak-downgraded task re-escalates it to the frontier exactly once |
+| **Zeak (economic layer)** | Transport decorator: Cache-Gate -> Pruner -> Capper -> Early-Stopper. Over-cap falls back to the free local model, LOUDLY (`zeak.fallback` + a durable flag). Early-Stop only fires when the last complete unit passed checks AND the contract is satisfied — never mid-structure |
+| **Local executor** | Ollama `qwen2.5-coder:1.5b` (OpenAI-compatible endpoint, 16K-64K context sized empirically to stay fully on GPU) + `nomic-embed-text` for embeddings |
+
+**Core rules:** models read context only from Common-S (raw logs are for the Compactor); no model-to-model direct communication; compaction after every sub-task; cache-first answering before any external call; trivial tasks never reach paid APIs.
+
 ## Repository layout
 
 | Path | What it is |

@@ -365,6 +365,38 @@ export class DeckHost {
     return this.journal.length
   }
 
+  /**
+   * Common-S: routing/economic notes folded from the journal with the SAME
+   * templates the renderer's reducer uses — expectedState() and the renderer's
+   * reconstructState() must agree byte-for-byte (contract test).
+   */
+  private routingNotesFromJournal(): string[] {
+    const notes: string[] = []
+    for (const event of this.journal) {
+      const p = event.payload as Record<string, unknown>
+      switch (event.type) {
+        case 'laya.routed':
+          notes.push(`Laya routed ${String(p['decision'])} (score ${String(p['score'])}): ${String((p['reasons'] as string[] | undefined)?.[0] ?? '')}`.trim())
+          break
+        case 'zeak.fallback':
+          notes.push(`Zeak fallback ${String(p['from'])} -> ${String(p['to'])} (${String(p['reason'])})`)
+          break
+        case 'zeak.early_stop':
+          notes.push(`Zeak early-stop after ${String(p['chunks'])} chunks (contract satisfied)`)
+          break
+        case 'zeak.escalation':
+          notes.push(`Zeak re-escalated task to ${String(p['to'])} (attempt ${String(p['attempt'])})`)
+          break
+        case 'collector.collected':
+          notes.push(`Collected ${String(p['count'])} item(s) via ${String(p['via'])}: ${String(p['topic'])}`)
+          break
+        default:
+          break
+      }
+    }
+    return notes
+  }
+
   /** The authoritative run state, computed directly from engine returns + bookkeeping. */
   expectedState(): ReconstructedState {
     return {
@@ -373,6 +405,7 @@ export class DeckHost {
       tasks: [...this.tasks.values()].sort(compareTasks),
       findings: [...this.findings.values()].sort(compareFindings),
       presence: [...this.presence.values()].sort(comparePresence),
+      routingNotes: this.routingNotesFromJournal(),
       crewHealth: [...this.crewHealthLedger].sort(byId),
       tokenSpend: this.tokenInput + this.tokenOutput,
       elapsedMs:
@@ -567,6 +600,14 @@ export class DeckHost {
         auditorModelIds: config.crew.security.map((s) => s.id),
         confirmationAutoIssue: true,
         gate: { failOn: 'critical' },
+        commonS: {
+          // Zeak fallback: route over-cap paid calls to the first local
+          // engineer when one exists (Ollama endpoint), else omit and Zeak
+          // falls back to its default id.
+          ...(config.crew.engineers.some((e) => e.endpoint !== undefined && e.endpoint.includes('11434'))
+            ? { fallbackModelId: config.crew.engineers.find((e) => e.endpoint !== undefined && e.endpoint.includes('11434'))!.id }
+            : {}),
+        },
       })
       this.currentWired = wired
       this.subscribeHub(wired, runId)
@@ -581,14 +622,48 @@ export class DeckHost {
       this.phase = 'planning'
       this.seedPresence(config)
 
-      const tasks = await wired.leader.plan({
+      // ---- Laya (Dept 1): route before anything paid happens ----
+      const layaDecision = await wired.laya({
         brief: config.brief,
-        goalState: config.goalState.join(', '),
-        crew: {
-          lead: config.crew.lead.id,
-          engineers: config.crew.engineers.map((e) => e.id),
-        },
+        goalState: config.goalState,
+        crewSize: config.crew.engineers.length,
       })
+      this.emit('laya.routed', {
+        runId,
+        decision: layaDecision.decision,
+        score: layaDecision.score,
+        reasons: layaDecision.reasons,
+      })
+
+      let tasks: Awaited<ReturnType<typeof wired.leader.plan>>
+      const crewForPlan = {
+        lead: config.crew.lead.id,
+        engineers: config.crew.engineers.map((e) => e.id),
+      }
+      if (layaDecision.decision === 'local') {
+        // Trivial: skip the frontier planner entirely — Laya mints ONE task
+        // for the local executor; zero paid calls in planning. seedLocalPlan
+        // persists the same commons keys plan() would, so route/verify/
+        // signOff/merge all behave identically downstream.
+        tasks = [{
+          id: 'T-01',
+          path: 'WORKSPACE/output.md',
+          description: config.brief,
+          acceptance: [...config.goalState],
+        }]
+        await wired.leader.seedLocalPlan({
+          brief: config.brief,
+          goalState: config.goalState.join(', '),
+          crew: crewForPlan,
+          tasks,
+        })
+      } else {
+        tasks = await wired.leader.plan({
+          brief: config.brief,
+          goalState: config.goalState.join(', '),
+          crew: crewForPlan,
+        })
+      }
       this.abortGuard()
 
       // ---- building: route (claims) then run the crew ----
@@ -617,6 +692,9 @@ export class DeckHost {
             commons: wired.f07.commons,
             transport: wired.f07.transport,
             locks: wired.f07.locks,
+            // Common-S: the State Contract exit-path writer — done/blocked/
+            // handed_off entries land in the Brain before a worker leaves.
+            contractWriter: wired.contractWriter,
           },
         },
       )

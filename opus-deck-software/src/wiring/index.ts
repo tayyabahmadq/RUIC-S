@@ -47,6 +47,14 @@ import { ReviewAgent, createReviewAgent, listRules } from '../f11/index.js'
 import type { PersistedFinding } from '../f11/index.js'
 import { createCodegraph, fingerprintSourceTree } from '../f12/index.js'
 import type { CodegraphResult } from '../f12/types.js'
+import { Brain } from '../state/index.js'
+import type { EmbedFn } from '../state/index.js'
+import { route as layaRoute } from '../routing/laya.js'
+import type { LayaDecision, LayaInput } from '../routing/laya.js'
+import { zeakWrap } from '../zeak/zeak.js'
+import { collectTopic, GitHubCollector, BrowserCollector } from '../depts/data-collection.js'
+import type { Collector } from '../depts/data-collection.js'
+import { f07SetDefaultContractWriter } from '../crew/index.js'
 import * as nodePath from 'node:path'
 
 /**
@@ -93,12 +101,30 @@ export interface WireOptions {
    * shipped default "critical" applies.
    */
   gate?: { failOn?: FailOnSeverity }
+  /**
+   * Common-S v2 (Tier 1-4). All optional — absent = shipped behavior with a
+   * Brain that has no embedder (vector ops degrade gracefully).
+   */
+  commonS?: {
+    /** Embedder for the vector store (e.g. Ollama nomic-embed-text). */
+    embed?: EmbedFn
+    /** Zeak: the free local fallback model id in the registry. */
+    fallbackModelId?: string
+    /** Zeak: per-department token caps for one run. */
+    departmentCaps?: Record<string, number>
+    /** Zeak: one-shot Security re-escalation budget. Default 1. */
+    escalationBudget?: number
+    /** Cache-gate similarity threshold. Default 0.9 (conservative). */
+    cacheThreshold?: number
+    /** Hard vector cap (RAM budget). Default 2000. */
+    vectorCap?: number
+  }
 }
 
 export interface WiredDeck {
   runtime: OpusDeckRuntime
   hub: EventHub
-  /** Raw folder-02 transport for f11 review agent (R3: direct LLM calls, not f07 queue). */
+  /** Folder-02 transport (Zeak-wrapped in v2) for f11 review agent (R3: direct LLM calls, not f07 queue). */
   transport: F02Transport
   commons: F03Commons
   /**
@@ -175,6 +201,14 @@ export interface WiredDeck {
   merge: (memoryDir: string, outputDir: string) => Promise<Manifest>
   writeReport: (memoryDir: string, outPath: string) => Promise<string>
   persistFindings: (findings: readonly F08Finding[]) => Promise<void>
+  /** Common-S v2: the Brain (contracts + vectors + task flags). */
+  brain: Brain
+  /** Common-S v2: Laya routing decision for one instruction. */
+  laya: (input: LayaInput) => Promise<LayaDecision>
+  /** Common-S v2: Dept 2 — cache-gate first collection through the seam. */
+  collect: (topic: string) => ReturnType<typeof collectTopic>
+  /** Common-S v2: contract writer factory for crew deps (exit-path writes). */
+  contractWriter: NonNullable<import('../crew/types.js').CrewDependencies['contractWriter']>
 }
 
 export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOptions): Promise<WiredDeck> {
@@ -203,6 +237,47 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
   // Retarget crew's default bus (used by buildPrompt) to the shared hub so
   // compaction.requested reaches the compactor subscribed below.
   f07SetDefaultBus(hub)
+
+  // --- Common-S v2: the Brain (Tier 1 core) ---
+  const cs = options.commonS ?? {}
+  const brain = new Brain(memoryDir, cs.embed ?? null, { vectorCap: cs.vectorCap })
+  await brain.init()
+  // State Contract exit-path enforcement: wiring installs the Brain-backed
+  // writer as the crew default (per-worker deps.contractWriter still wins).
+  f07SetDefaultContractWriter(async (input) => {
+    await brain.writeContract(input)
+  })
+  // Triangular Loop heartbeat: after EVERY sub-task (completion or failure),
+  // queue a serialized compaction cycle. Brain.requestCompaction guarantees
+  // one-at-a-time; the Compactor's own running-flag + fingerprint dedupe the
+  // digest pass. Vector decay + contract fold run inside the serialized cycle.
+  const triggerDigestCompaction = (): void => {
+    void hub.emit('compaction.requested', {})
+  }
+  hub.subscribe('task.completed', (payload: unknown) => {
+    const taskId = (payload as { taskId?: unknown } | null)?.taskId
+    void brain.requestCompaction(triggerDigestCompaction).catch(() => undefined)
+    if (typeof taskId === 'string') void brain.setTaskFlags(taskId, {}).catch(() => undefined)
+  })
+  hub.subscribe('task.failed', () => {
+    void brain.requestCompaction(triggerDigestCompaction).catch(() => undefined)
+  })
+
+  // --- Common-S v2: Zeak (Tier 4 economic layer) wraps the ONE transport
+  // seam every phase shares. Over-cap falls back to the free local model,
+  // loudly (zeak.fallback + a durable zeakFallback flag on Brain state).
+  const zeakSpend = { departments: {} as Record<string, number>, escalationsUsed: 0 }
+  const zeakBudgets = {
+    departments: cs.departmentCaps ?? { engineering: 60_000, security: 30_000, deep_thinking: 120_000 },
+    escalations: cs.escalationBudget ?? 1,
+  }
+  const transport = zeakWrap(options.transport, {
+    budgets: zeakBudgets,
+    brain,
+    events: { emit: (event, payload) => void hub.emit(event, payload) },
+    fallbackModelId: cs.fallbackModelId ?? 'local-executor',
+    ...(cs.cacheThreshold !== undefined ? { cacheThreshold: cs.cacheThreshold } : {}),
+  })
 
   // --- Phase 3: COMMONS (single source of truth) ---
   // R10: memory.written is emitted from the wiring layer — commons itself
@@ -241,7 +316,7 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
   const claims = new ClaimsAdapter(acquire, release, holdersOf)
   const conflicts = new ConflictsAdapter()
   const bus = hubBus(hub)
-  const f06Transport = new F06TransportAdapter(options.transport)
+  const f06Transport = new F06TransportAdapter(transport)
   const leader = new Leader({
     transport: f06Transport as unknown as F06Transport,
     commons: f06Commons,
@@ -258,7 +333,7 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
 
   // --- Phase 4: Compactor (watch() at startup on the shared hub) ---
   const f04Commons = new F04CommonsAdapter(f03, memoryDir)
-  const f04Transport = new F04TransportAdapter(options.transport, options.leadModelId)
+  const f04Transport = new F04TransportAdapter(transport, options.leadModelId)
   const compactor = new Compactor(
     { transport: f04Transport, commons: f04Commons, bus: hub },
     { llmModel: 'compactor-small', digestTokenBudget: runtime.config.budgets.digestTokens },
@@ -267,7 +342,7 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
 
   // --- Phase 7: Crew deps ---
   const f07Commons = new F07CommonsClient(f03, memoryDir)
-  const f07Transport = new F07TransportClient(options.transport)
+  const f07Transport = new F07TransportClient(transport)
   const f07Locks = new F07LockClient(acquire, release)
 
   // --- Phase 8: Audit glue ---
@@ -287,7 +362,7 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
   const f11ReviewAgent = createReviewAgent({
     hub,
     commons: f03,
-    transport: options.transport,
+    transport,
     estimateTokens,
     holdersOf: (p: string) => Promise.resolve(holdersOf(p)),
     persistFindings: (findings: readonly PersistedFinding[]) =>
@@ -437,9 +512,29 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
   }
 
   return {
-    runtime, hub, transport: options.transport, commons: f03, leader, reviewQueue, compactor,
+    runtime, hub, transport, commons: f03, leader, reviewQueue, compactor,
     confirmations,
     personas,
+    brain,
+    laya: (input: LayaInput) => layaRoute(input, brain, 0),
+    collect: (topic: string) => {
+      const github = new GitHubCollector({
+        ...(process.env.GITHUB_TOKEN !== undefined ? { token: process.env.GITHUB_TOKEN } : {}),
+      })
+      // Obscura Browser sits behind the same collector seam: the host wires a
+      // launch callback when a browser agent is available; without one,
+      // collection degrades to GitHub only (no BrowserCollector is built).
+      const collector: Collector = github
+      return collectTopic(topic, {
+        brain,
+        collector,
+        events: { emit: (event, payload) => void hub.emit(event, payload) },
+        ...(cs.cacheThreshold !== undefined ? { cacheThreshold: cs.cacheThreshold } : {}),
+      })
+    },
+    contractWriter: async (input) => {
+      await brain.writeContract(input)
+    },
     gate: { failOn: gateFailOn },
     remediationBatchScope: remediationBatchScopeFor,
     f05: { upsert, snapshot, acquire, release, holdersOf, syncSince, drainQueue },

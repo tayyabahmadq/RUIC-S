@@ -288,3 +288,20 @@ in `app/` only; the engine is untouched (R18, aggregate 46B641F2…).
   scaffolding and to pass on the hardened host.
 - **Electron:** pinned to 31.x; WebContentsView used because BrowserView is
   removal-bound.
+
+
+## Common-S v2 (2026-10-25)
+
+Sanctioned engine phase (re-freeze aggregate `58861E794B70EF5C01C1CE55C1BBFD1C12C4600057B22239AB83EDA4A071AC98`, regenerated via `scripts/refreeze.mjs`):
+
+- **Brain** (`src/state/`): State Contract v1.0.0 (`schemaVersion`, `taskId`, `parentTaskId`, `status` in_progress|blocked|handed_off|done, `owner`, `done`, `decisions`, `remaining`, `artifacts`), enforced at the worker EXIT path; `state.json` task flags; file-backed vector store with recency-x-relevance decay cap.
+- **Triangular Loop**: `compaction.requested` after every sub-task (completion AND failure), serialized through the Brain's queue; all three stores compacted.
+- **Laya** (`src/routing/laya.ts`): deterministic router; trivial -> local end-to-end (`leader.seedLocalPlan` mints T-01 with zero paid calls); heavy -> Dept 4.
+- **Dept 4**: the leader's string-split "split" strategy REPLACED by intact handoff re-queue (`'requeued'` resolution); `parentTaskId` stitching.
+- **Dept 2** (`src/depts/data-collection.ts`): collector seam — GitHub-as-data-source (budgeted REST, 403 = budget spent) + Obscura Browser behind the same interface (serialized, graceful miss).
+- **Zeak** (`src/zeak/`): Cache-Gate -> Pruner -> Capper -> Early-Stopper over the single transport seam; loud fallback (`zeak.fallback` + durable `zeakFallback` flag) with a one-shot Security re-escalation budget.
+- **Crew**: `task.failed` emitted on worker failure; `contractWriter` seam (module default installed by wiring) writes done/blocked/handed_off contracts.
+- **Gate**: engine diff zero re-baselined; expected test counts replaced with all-pass assertions.
+- **Fixed en route**: `STATE/tasks.json` initialized as an array at BOTH boot sites (the object shape broke merge/verify on any run that skipped leader.plan).
+
+Verification: engine suite 155/155, app suite 10/10, gate.mjs PASS (all 7 items incl. real-Electron contract + escape tests).

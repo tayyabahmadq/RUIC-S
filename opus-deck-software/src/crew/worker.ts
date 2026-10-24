@@ -174,6 +174,22 @@ export function f07GetDefaultSystemPrompt(): string | undefined {
   return defaultSystemPrompt
 }
 
+/* Common-S: crew default State Contract writer seam. Same module-default
+ * pattern: wiring retargets it once at wire time to the Brain-backed writer;
+ * a per-worker deps.contractWriter always wins; `undefined` restores shipped
+ * behavior (no contract writes). */
+let defaultContractWriter: CrewDependencies['contractWriter']
+
+export function f07SetDefaultContractWriter(
+  writer: NonNullable<CrewDependencies['contractWriter']> | undefined,
+): void {
+  defaultContractWriter = writer
+}
+
+export function f07GetDefaultContractWriter(): CrewDependencies['contractWriter'] {
+  return defaultContractWriter
+}
+
 async function readCommonsText(commons: { read?: unknown }, path: string): Promise<string> {
   const readFn = asCallable((commons as Record<string, unknown>)['read'])
   if (!readFn) return ''
@@ -256,13 +272,27 @@ export class EngineerWorker {
       if (!task) break
       try {
         await this.processTask(task, resolvedQueue)
-      } catch {
+      } catch (err) {
+        // Common-S exit path: a worker that fails mid-task writes status
+        // 'blocked' + remaining BEFORE leaving the desk, so the next model
+        // never reads stale state — the resume point survives the crash.
+        const detail = err instanceof Error ? err.message : String(err)
+        await this.writeContractSafe({
+          taskId: task.id, status: 'blocked', owner: this.modelId,
+          remaining: [`task ${task.id} failed before completion: ${detail}`],
+        })
         this.consecutiveFailures += 1
         this.failedTaskIds.push(task.id)
         try { (task as MutableTask).status = 'failed' } catch { }
         this.deps.bus?.emit('task.failed', { taskId: task.id, modelId: this.modelId })
         const limit = this.deps.consecutiveFailureLimit ?? 3
         if (this.consecutiveFailures >= limit) {
+          // Common-S handoff: retiring IS bailing — the 'handed_off' write is
+          // the handoff. Dept 4 reads remaining and re-queues the work.
+          await this.writeContractSafe({
+            taskId: task.id, status: 'handed_off', owner: this.modelId,
+            remaining: [`worker ${this.modelId} retired after ${this.consecutiveFailures} consecutive failures; re-queue task ${task.id} for another model`],
+          })
           this.retiredFlag = true
           const retireFn = asCallable((resolvedQueue as Record<string, unknown>)['retire'])
           if (retireFn) await retireFn.call(resolvedQueue, this.modelId)
@@ -341,8 +371,36 @@ export class EngineerWorker {
       this.completedTaskIds.push(task.id)
       try { (task as MutableTask).status = 'completed' } catch { }
       bus?.emit('task.completed', { taskId: task.id, modelId: this.modelId, intent })
+      // Common-S exit path: success writes 'done' + artifacts BEFORE the
+      // worker picks up its next claim ("write before you leave the desk").
+      await this.writeContractSafe({
+        taskId: task.id, status: 'done', owner: this.modelId,
+        done: `wrote ${intent.path}: ${intent.intent}`,
+        artifacts: [intent.path],
+        decisions: [intent.intent],
+      })
     } finally {
       await releaseLocks(locks, this.modelId, claimTargets)
+    }
+  }
+
+  /** Exit-path contract writer: best-effort, never throws into the run loop. */
+  private async writeContractSafe(input: {
+    taskId: string
+    status: 'done' | 'blocked' | 'handed_off'
+    owner: string
+    done?: string
+    remaining?: readonly string[]
+    decisions?: readonly string[]
+    artifacts?: readonly string[]
+  }): Promise<void> {
+    const writer = this.deps.contractWriter ?? defaultContractWriter
+    if (writer === undefined) return
+    try {
+      await writer(input)
+    } catch {
+      // A contract write failure must never crash the worker; the next exit
+      // path write supersedes it (last entry per taskId wins).
     }
   }
 
