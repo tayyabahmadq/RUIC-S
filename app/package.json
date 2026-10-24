@@ -1,0 +1,22 @@
+{
+  "name": "ruic-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ruic Control Deck - Electron (Chromium) desktop shell around the frozen ruic engine.",
+  "main": "dist/main/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test dist/test/*.test.js",
+    "test:electron": "node scripts/build.mjs && node scripts/run-electron-contract.mjs",
+    "probe": "node scripts/probe-bridge-types.mjs",
+    "gate": "node scripts/gate.mjs"
+  },
+  "dependencies": {
+    "electron": "^31.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.5.0"
+  }
+}

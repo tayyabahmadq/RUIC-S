@@ -1,0 +1,168 @@
+OPUS//DECK — parts/folder-11 — INTEGRATION CONTRACT
+Part: folder-11 — REVIEW AGENT (precision diff-review)
+Status: standalone-complete. Builds strict, all tests pass, offline smoke passes.
+
+=====================================================================
+1. WHAT I BUILT
+=====================================================================
+folder-11 implements the precision diff-review agent: a deterministic
+selection → bundling → rule matching → positioning → reflection pipeline
+that reviews WORKSPACE changes with near-zero false-alarm rate and feeds
+findings into the existing STATE/findings.json → escalation → ReviewQueue
+loop. No model convenience-choice can silently skip a file: every
+non-excluded file appears in at least one bundle (asserted in code),
+and every dropped finding is recorded with its reason (positioning or
+reflection only).
+
+The agent is orchestrated by ReviewAgent.review(request), which:
+  a) collects the file list (explicit paths or DELTA/txn-log scope from WORKSPACE),
+  b) filters exclusions (non-text/binary, over size cap, held-claim paths,
+     vendored/generated globs),
+  c) bundles files (same-stem test/file pairs, dir-sibling config grouping,
+     token-budgeted with folder-04's estimateTokens),
+  d) calls the f02 transport once per bundle via ReviewAgent (NOT the
+     f07 task/claim queue — R3),
+  e) positions findings to exact lines via content match,
+  f) reflects (second-pass confirm/deny) per bundle,
+  g) persists findings to STATE/findings.json via the wiring layer,
+  h) escalates unpatchable criticals to the ReviewQueue,
+  i) emits review.requested / review.bundle.started / review.bundle.done /
+     review.completed on the shared hub,
+  j) writes STATE/folder-11/reviews/<runId>.json audit record.
+
+=====================================================================
+2. FILE MAP
+=====================================================================
+parts/folder-11/package.json              npm manifest; scripts build/test; zod dep, TS devDeps
+parts/folder-11/package-lock.json         lockfile
+parts/folder-11/tsconfig.json             strict TS config; src/ → dist/
+parts/folder-11/INTEGRATION.txt           this file
+parts/folder-11/src/index.ts              public API barrel
+parts/folder-11/src/types.ts              ReviewRequest, ReviewBundle, ReviewCriterion,
+                                          PositionedFinding, ReviewResult, RulePack,
+                                          ReviewAgentDeps, Disposition, ReflectionVerdict,
+                                          DropReason, RawFinding
+parts/folder-11/src/collect.ts            collectFiles() — explicit paths or WORKSPACE walk
+parts/folder-11/src/filter.ts             filterFiles() — exclusions with reasons
+parts/folder-11/src/bundle.ts             bundleFiles() — pair grouping, config grouping,
+                                          token-budgeted with f04 estimateTokens
+parts/folder-11/src/rules.ts              TYPESCRIPT_PACK (SEC-001..SEC-007), RULE_PACKS,
+                                          criteriaForBundle(), listRules()
+parts/folder-11/src/review-agent.ts       ReviewAgent class — orchestration pipeline
+parts/folder-11/src/position.ts           positionFindings() — line anchoring via content match
+parts/folder-11/src/reflect.ts            buildReflectPrompt(), parseReflectOutput()
+parts/folder-11/src/smoke.test.ts         smoke tests (bundle fixtures, coverage guarantee,
+                                          position anchor, reflect-deny, end-to-end review)
+parts/folder-11/dist/                     compiled output
+
+=====================================================================
+3. PUBLIC INTERFACE
+=====================================================================
+export interface ReviewRequest { runId, brief, goalState, memoryDir, files?, criteria? }
+export interface ReviewBundle { id, files[], tokenEstimate, criteria[] }
+export interface ReviewCriterion { id, severity, promptHint, ruleSource }
+export interface PositionedFinding { id, ruleId, severity, path, line, evidence, message,
+                                     patchStrategy?, blocking, disposition, reflection? }
+export interface ReviewDrop { id, path, line, ruleId, reason }
+export interface ReviewReflection { findingId, verdict }
+export interface ReviewResult { runId, requests, bundles, findings, dropped, reflections }
+export interface RulePack { id, language, globs, criteria[] }
+export interface ReviewAgentDeps { hub, commons, transport, estimateTokens, holdersOf?,
+                                   persistFindings, escalationQueue, auditorModelIds,
+                                   reviewModelId }
+export class ReviewAgent { constructor(deps); review(request): Promise<ReviewResult> }
+export function createReviewAgent(deps): { review, listRules }
+export function listRules(): RulePackSummary[]
+export const RULE_PACKS: readonly RulePack[]
+export const TYPESCRIPT_PACK: RulePack
+
+=====================================================================
+4. EXPECTS FROM OTHERS
+=====================================================================
+- folder-03 (COMMONS core): openCommons(memoryDir) → Commons{read, write, …}
+  Used to read file contents for bundle prompts and to write the audit
+  record to STATE/folder-11/reviews/<runId>.json.
+- folder-02 (transport): Transport.complete(req): AsyncIterable<TransportChunk>.
+  All LLM calls go directly through folder-02 (R3), never the f07 task queue.
+- folder-04 (compactor): estimateTokens(text) — used for bundle token budgeting (R1).
+- folder-05 (presence/locks): holdersOf(path) — optional claim check; held-claim
+  paths are excluded from review. Optional seam.
+- folder-06 (leader): ReviewQueue — escalations flow into decide() → pending
+  decision; veto() produces a routed follow-up task with a real WORKSPACE
+  path (R4).
+- folder-08 (audit): persistFindings(findings) → STATE/findings.json;
+  escalationQueue.push(escalation) → ReviewQueue.
+- folder-01 (scaffold): event hub — emits review.requested, review.bundle.*,
+  review.completed on the shared hub (R2: new event names, additive).
+
+=====================================================================
+5. PROVIDES TO OTHERS
+=====================================================================
+- ReviewAgent.review(request): full review pipeline. Returns ReviewResult
+  with findings, dropped, reflections, bundles, requests.
+- ReviewAgent.listRules(): RulePackSummary[] — available rule packs.
+- RULE_PACKS / TYPESCRIPT_PACK — rule pack data (SEC-001..SEC-007 criteria).
+- All types from types.ts (ReviewRequest, ReviewBundle, ReviewCriterion,
+  PositionedFinding, ReviewResult, RulePack, ReviewAgentDeps, etc.).
+- Events on the shared hub: review.requested, review.bundle.started,
+  review.bundle.done, review.completed { requests, bundles, findings,
+  dropped, reflections }.
+- STATE/folder-11/reviews/<runId>.json — full audit record: every file
+  selected or excluded (with reason), every bundle, every finding with
+  disposition + reflection verdict.
+
+=====================================================================
+6. CONFIG
+=====================================================================
+No environment variables. All behaviour passed per call through ReviewRequest.
+Bundle token cap: 4000 tokens (hard-coded constant, derived from folder-04's
+estimateTokens). Max file size: 100KB. Vendor dirs: node_modules, .git, dist,
+build, out, .next, coverage, .venv. Generated suffixes: .min.js, .min.css,
+.lock, .map, .min.mjs.
+
+=====================================================================
+7. RUN STANDALONE
+=====================================================================
+cd parts/folder-11
+npm install
+npm run build      → tsc strict → dist/, exit 0
+npm test           → node --test dist/smoke.test.js, exit 0
+
+=====================================================================
+8. INTEGRATION NOTES
+=====================================================================
+- folder-11 does NOT import across folder boundaries at runtime; all
+  collaborators are constructor-injected via ReviewAgentDeps (wiring layer
+  resolves them). Folder numbers in §4 are assumptions; the interface is
+  the contract.
+- R1: folder-11 consumes folder-04's estimateTokens for bundle budgeting.
+  No second estimator is written inside f11.
+- R2: review.* event names are NEW members of the f01 EventName/EventPayloads
+  closed set; existing events are never repurposed. PROVENANCE event catalog
+  updated accordingly.
+- R3: review LLM calls go directly through folder-02's Transport.complete.
+  They do NOT enter the f07 task/claim queue. The optional claim on reviewed
+  paths stays optional and advisory.
+- R4: unpatchable-critical findings escalate to the ReviewQueue; veto produces
+  a follow-up task whose path is decision.touched[0], a real claimable
+  WORKSPACE path.
+- Positioning + reflection are the ONLY reasons a finding may be dropped.
+  Every drop is recorded with its reason in ReviewDrop.
+- STATE/folder-11/reviews/<runId>.json answers "did the reviewer skip it?"
+  for every file, every bundle, every finding.
+
+=====================================================================
+9. DO NOT CHANGE
+=====================================================================
+- ReviewAgent.review(request) signature must remain the single public entry
+  point.
+- ReviewResult shape: { runId, requests, bundles, findings, dropped,
+  reflections } must not change.
+- PositionedFinding.disposition is 'anchored' | 'unanchored' only.
+- ReviewDrop.reason is 'unanchored' | 'denied' only.
+- ReviewReflection.verdict is 'confirmed' | 'denied' only.
+- Event names review.requested / review.bundle.started / review.bundle.done /
+  review.completed must not be repurposed; payloads as typed in f01
+  EventPayloads.
+- STATE/folder-11/reviews/<runId>.json audit record shape must not change.
+- TypeScript strict mode, no-any policy, zod for validation preserved.

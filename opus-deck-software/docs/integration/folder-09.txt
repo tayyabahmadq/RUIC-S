@@ -1,0 +1,94 @@
+WHAT I BUILT
+The folder-09 MERGE & BUILD ENGINE turns a COMMONS shared-memory directory into a shippable output folder.
+It implements merge() which gates on readiness, copies WORKSPACE/** to the output directory with later-transaction-wins conflict resolution, logs every override to OVERRIDES.log and the manifest, and writes MANIFEST.json with per-file LOC, last txn id, and sha256.
+It implements checkReadiness() with exactly three gate checks (critical findings, goal verification, dangling locks) and makes merge() throw CommonsError code GATE_FAILED carrying the failing checks when the gate is red.
+It implements generateReport()/writeReport() producing deterministic plain-markdown REPORT.md with crew, findings, goal-verification, and sign-off sections.
+It ships standalone file-backed readers plus a stub COMMONS builder so all of the above runs with no other folders present.
+All validation of on-disk JSON uses zod; all failures throw CommonsError with folder 'folder-09'.
+
+FILE MAP
+src/index.ts — public API barrel, re-exports every public symbol.
+src/types.ts — shared types: FOLDER, Severity, Finding, GoalCriterion, VerificationResult, ClaimRecord, TransactionRecord, ManifestEntry, OverrideRecord, Manifest, GateCheck, ReportOptions, StubSeed.
+src/errors.ts — CommonsError class.
+src/verify-build.ts — pre-merge gate: checkReadiness, isGatePassed, loadFindings, loadCriteria, loadVerifications, loadClaims, loadTransactions, sha256Hex.
+src/merge.ts — merge, readManifest, ManifestSchema.
+src/report.ts — generateReport, writeReport, checksumForManifest.
+src/stubs.ts — createStubMemoryDir stub COMMONS builder and StubMemoryInfo.
+src/fs-utils.ts — internal helpers: pathExists, ensureDir, walkFiles, normalizeRel, countLoc.
+package.json — name folder-09-merge-build-engine, deps zod, devDeps typescript/@types/node, scripts build/test/smoke.
+tsconfig.json — strict TS, CommonJS, outDir dist, rootDir ., includes src+test.
+test/smoke.test.ts — node:test smoke suite, 10 subtests covering every public export.
+INTEGRATION.txt — this file, authoritative contract.
+
+PUBLIC INTERFACE
+import { CommonsError } from "./dist/src/index.js";
+class CommonsError extends Error { code: string; folder: "folder-09"; detail?: string; constructor(message: string, code: string, detail?: string); }
+import { FOLDER } from "./dist/src/index.js";
+const FOLDER: "folder-09";
+async function merge(memoryDir: string, outputDir: string): Promise<Manifest>;
+async function readManifest(outputDir: string): Promise<Manifest>;
+const ManifestSchema: import("zod").ZodObject<{ version: import("zod").ZodLiteral<1>; createdAt: import("zod").ZodString; memoryDir: import("zod").ZodString; files: import("zod").ZodArray<import("zod").ZodObject<{ path: import("zod").ZodString; loc: import("zod").ZodNumber; txn: import("zod").ZodString; sha256: import("zod").ZodString; bytes: import("zod").ZodNumber; }, "strip", import("zod").ZodTypeAny, { path: string; loc: number; txn: string; sha256: string; bytes: number; }, { path: string; loc: number; txn: string; sha256: string; bytes: number; }>, "many">; overrides: import("zod").ZodArray<import("zod").ZodObject<{ path: import("zod").ZodString; winner: import("zod").ZodString; losers: import("zod").ZodArray<import("zod").ZodString, "many">; }, "strip", import("zod").ZodTypeAny, { path: string; winner: string; losers: string[]; }, { path: string; winner: string; losers: string[]; }>, "many">; totalFiles: import("zod").ZodNumber; totalLoc: import("zod").ZodNumber; }, "strip", import("zod").ZodTypeAny, { version: 1; createdAt: string; memoryDir: string; files: { path: string; loc: number; txn: string; sha256: string; bytes: number; }[]; overrides: { path: string; winner: string; losers: string[]; }[]; totalFiles: number; totalLoc: number; }, { version: 1; createdAt: string; memoryDir: string; files: { path: string; loc: number; txn: string; sha256: string; bytes: number; }[]; overrides: { path: string; winner: string; losers: string[]; }[]; totalFiles: number; totalLoc: number; }>;
+async function checkReadiness(memoryDir: string): Promise<GateCheck[]>;
+function isGatePassed(checks: GateCheck[]): boolean;
+async function loadFindings(memoryDir: string): Promise<Finding[]>;
+async function loadCriteria(memoryDir: string): Promise<GoalCriterion[]>;
+async function loadVerifications(memoryDir: string): Promise<VerificationResult[]>;
+async function loadClaims(memoryDir: string): Promise<ClaimRecord[]>;
+async function loadTransactions(memoryDir: string): Promise<TransactionRecord[]>;
+function sha256Hex(content: Buffer | string): string;
+async function generateReport(memoryDir: string, options?: ReportOptions): Promise<string>;
+async function writeReport(memoryDir: string, outPath: string, options?: ReportOptions): Promise<string>;
+function checksumForManifest(manifest: Manifest): string;
+async function createStubMemoryDir(root: string, seed?: StubSeed): Promise<StubMemoryInfo>;
+interface StubMemoryInfo { memoryDir: string; workspaceDir: string; deltaDir: string; stateDir: string; }
+interface Manifest { version: 1; createdAt: string; memoryDir: string; files: ManifestEntry[]; overrides: OverrideRecord[]; totalFiles: number; totalLoc: number; }
+interface ManifestEntry { path: string; loc: number; txn: string; sha256: string; bytes: number; }
+interface OverrideRecord { path: string; winner: string; losers: string[]; }
+interface GateCheck { id: "critical-findings" | "goal-verification" | "dangling-locks"; name: string; passed: boolean; detail?: string; }
+interface Finding { id: string; severity: "critical" | "high" | "medium" | "low"; path: string; line?: number; detector: string; resolved: boolean; }
+interface GoalCriterion { id: string; description: string; }
+interface VerificationResult { criterionId: string; status: "satisfied" | "documented" | "pending"; evidence?: string; }
+interface ClaimRecord { holder: string; path?: string; txn?: string; released: boolean; }
+interface TransactionRecord { id: string; timestamp: string; author: string; files: string[]; }
+interface ReportOptions { leadModel?: string; timestamp?: string; compactionCount?: number; checksum?: string; manifest?: Manifest; }
+interface StubSeed { leadModel?: string; compactionCount?: number; transactions?: Array<{ id: string; timestamp: string; author: string; files: Record<string, string>; }>; findings?: Finding[]; criteria?: GoalCriterion[]; verifications?: VerificationResult[]; claims?: ClaimRecord[]; }
+type Severity = "critical" | "high" | "medium" | "low";
+
+EXPECTS FROM OTHERS
+No hard dependency on any other folder number; every cross-part shape is defined locally in src/types.ts and served by the stub in src/stubs.ts so this part builds standalone.
+Stubbed-against interfaces and their canonical on-disk locations: findings list (STATE/findings.json as Finding[] or { findings: Finding[] }) expected from the security-gate part; goal criteria (STATE/goal-state.json or STATE/goals.json as { criteria: GoalCriterion[] } or GoalCriterion[]) and verification results (STATE/verification.json or STATE/verifications.json as { results: VerificationResult[] } or VerificationResult[]) expected from the planning/goal part; claim/lock records (STATE/presence.json as { claims: ClaimRecord[] } or { locks: [{ holder, path?, txn?, released?, held? }] } plus optional lead/leadModel string) expected from the presence/lock part; transaction records (DELTA/*.json as { id, timestamp, author|model, files: string[]|[{path}]|paths } or DELTA/<id>/meta.json same shape, plus optional per-txn snapshots at DELTA/<id>/files/**) expected from the delta/journal part; lead model name and compaction count also read from STATE/presence.json lead field and STATE/compaction.json { count } expected from the lead/compactor parts.
+If the integrator replaces these file layouts, replace the loader functions in src/verify-build.ts and the crew attribution in src/report.ts; the Manifest/GateCheck/REPORT.md shapes stay fixed.
+
+PROVIDES TO OTHERS
+Import merge(memoryDir, outputDir) from folder-09 to materialize the shippable folder; it writes MANIFEST.json and OVERRIDES.log into outputDir and returns Manifest.
+Import checkReadiness(memoryDir)/isGatePassed(checks) for the CLI pre-merge gate display; the three GateCheck ids are stable: critical-findings, goal-verification, dangling-locks.
+Import generateReport(memoryDir, options?)/writeReport(memoryDir, outPath, options?) to produce REPORT.md; ReportOptions overrides leadModel/timestamp/compactionCount/checksum/manifest for determinism.
+Import readManifest(outputDir)/ManifestSchema/checksumForManifest(manifest) to validate manifests and recompute the sign-off checksum (sha256 over sorted path:sha256 lines).
+Import CommonsError for uniform error handling (check err.folder === 'folder-09' and err.code).
+
+CONFIG
+No environment variables. No keys. No config files. All inputs are function arguments and COMMONS files on disk. Defaults: missing STATE/findings.json means zero findings (gate passes with detail noting vacuous truth); missing goal files or empty criteria means vacuously satisfied; missing STATE/presence.json means zero claims; missing DELTA means single implicit txn id 'workspace'; unknown txn author defaults to 'unknown'; lead model defaults to 'lead'; compaction count defaults to 0; report timestamp defaults to manifest.createdAt then current ISO time.
+
+RUN STANDALONE
+Commands below assume a Node 20+ binary on PATH (or substitute the full node path). Run from parts/folder-09/.
+1. node /path/to/node/node_modules/npm/bin/npm-cli.js install --no-audit --no-fund — expected: added 4 packages.
+2. node /path/to/node/node_modules/npm/bin/npm-cli.js run build — expected: tsc exits 0, dist/src/*.js and dist/src/*.d.ts emitted.
+3. node /path/to/node/node_modules/npm/bin/npm-cli.js test — expected: build then TAP output ending # pass 10 # fail 0, exits 0.
+With npm on PATH the short forms work: npm install; npm run build; npm test (same expected outputs).
+
+INTEGRATION NOTES
+Assumption: WORKSPACE/** already holds later-wins content; DELTA records supply authorship/order for overrides and crew attribution, not necessarily full snapshots. When DELTA/<txn>/files/** snapshots exist they are replayed in txn order, otherwise WORKSPACE is copied verbatim; either way the override log derives from DELTA writers, so keep DELTA writer lists complete or overrides will under-report.
+Assumption: later-txn-wins ordering is lexicographic by (timestamp, id); timestamps should be ISO-8601 so lexicographic equals chronological.
+Assumption: LOC is content.split('\n').length for non-empty UTF-8 files, 0 for empty files; bytes is Buffer.byteLength; sha256 is hex over raw bytes.
+Assumption: gate treats missing files as vacuous pass (documented in CONFIG) so a fresh COMMONS with only WORKSPACE merges; if the integrator wants strict mode (missing file = fail), change the three early returns in checkReadiness/loaders.
+Assumption: MANIFEST.json and OVERRIDES.log are always written into outputDir alongside copied files; REPORT.md is written only by writeReport to the caller-chosen path (convention: <outputDir>/REPORT.md).
+Gap: no streaming for huge files; whole files are buffered. Gap: no file-mode/symlink preservation; only regular files are copied. Gap: per-txn snapshot layout supports DELTA/<id>/files/** and DELTA/<id>/** direct; other layouts are ignored for content but still counted for overrides.
+Decision: checkReadiness returns exactly 3 checks in fixed order; merge throws CommonsError code GATE_FAILED with detail JSON.stringify(failingChecks) rather than returning checks, so CLI must catch and parse detail.
+Decision: report markdown uses fixed headers (# Build Report, ## Crew, ## Findings, ## Goal-State Verification, ## Sign-off), pipe tables sorted by key, LF endings; determinism requires passing options.timestamp and options.manifest when a stable checksum/timestamp is needed.
+
+DO NOT CHANGE
+Public signatures merge(memoryDir: string, outputDir: string): Promise<Manifest>, checkReadiness(memoryDir: string): Promise<GateCheck[]>, generateReport(memoryDir: string, options?: ReportOptions): Promise<string>, and writeReport(memoryDir: string, outPath: string, options?: ReportOptions): Promise<string> must keep exact names, arity, and return types.
+Manifest shape { version: 1, createdAt, memoryDir, files: [{ path, loc, txn, sha256, bytes }], overrides: [{ path, winner, losers }], totalFiles, totalLoc } and GateCheck ids critical-findings/goal-verification/dangling-locks must survive integration.
+Conflict rule later-txn-wins with an explicit override log entry per multi-writer path (never silent) must survive; OVERRIDES.log one line per override as 'path winner=<id> losers=<a,b>' or single line 'no overrides'.
+CommonsError extends Error with { code: string, folder: 'folder-09', detail?: string } is the only failure channel.
+Strict TypeScript, no runtime deps beyond zod, kebab-case src filenames, tests via node:test.

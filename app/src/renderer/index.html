@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self'" />
+  <title>Ruic — Control Deck</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="shell-header">
+      <h1>Ruic — Control Deck</h1>
+      <div class="phase-strip" id="phaseStrip">Phase: idle</div>
+      <div class="timer" id="elapsedTimer">00:00:00</div>
+      <div class="tokens" id="tokenSpend">Tokens: 0</div>
+    </header>
+
+    <div class="body">
+      <aside class="sidebar">
+        <section class="card">
+          <h2>Brief &amp; Goal</h2>
+          <textarea id="briefInput" placeholder="Enter your brief..."></textarea>
+          <textarea id="goalInput" placeholder="Goal state (comma-separated criteria)..."></textarea>
+        </section>
+
+        <section class="card">
+          <h2>Crew</h2>
+          <div id="crewRoster" class="crew-roster"></div>
+        </section>
+
+        <section class="card actions">
+          <h2>Actions</h2>
+          <button id="runBtn" class="btn-primary">Run Deck</button>
+          <button id="abortBtn" class="btn-danger" disabled>Abort</button>
+        </section>
+
+        <section class="card status">
+          <h2>Connection</h2>
+          <div id="bridgeStatus" class="status-indicator status-error">Bridge: disconnected</div>
+        </section>
+      </aside>
+
+      <main class="main-panel">
+        <section class="card full">
+          <h2>Task Ledger</h2>
+          <table id="taskTable">
+            <thead>
+              <tr><th>ID</th><th>File</th><th>Holder</th><th>Status</th></tr>
+            </thead>
+            <tbody id="taskBody"></tbody>
+          </table>
+        </section>
+
+        <section class="card full">
+          <h2>Findings Feed</h2>
+          <div id="findingsList" class="findings-list"></div>
+        </section>
+
+        <section class="card full">
+          <h2>Preview</h2>
+          <div id="previewPanel" class="preview-panel">
+            <div class="preview-header">
+              <span id="previewTitle">Preview</span>
+              <div class="preview-controls">
+                <button id="previewOpenBtn" class="btn-small">Open</button>
+                <button id="previewCloseBtn" class="btn-small btn-danger" disabled>Close</button>
+              </div>
+            </div>
+            <div class="preview-file-list">
+              <h3>Files</h3>
+              <div id="previewFileList"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!--
+    Plain-script loading, no bundler: `prelude.js` provides the minimal
+    `module`/`exports` shim the compiled shared contract (CommonJS) needs;
+    `bind-bt.js` publishes its exports (sorting + empty-state helpers) as the
+    global `BT`; `app.js` is the renderer. All external same-origin files, so
+    the page's strict CSP (`script-src 'self'`) holds. The renderer never
+    imports engine code.
+  -->
+  <script src="prelude.js"></script>
+  <script src="../shared/bridge-types.js"></script>
+  <script src="bind-bt.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

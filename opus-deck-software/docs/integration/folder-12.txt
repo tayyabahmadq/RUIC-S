@@ -1,0 +1,190 @@
+OPUS//DECK — parts/folder-12 — INTEGRATION CONTRACT
+Part: folder-12 — CODEGRAPH (workspace knowledge-graph memory)
+Status: standalone-complete. Builds strict, all tests pass, offline smoke passes.
+
+=====================================================================
+1. WHAT I BUILT
+=====================================================================
+folder-12 implements the workspace knowledge-graph memory: a deterministic
+detect → extract → build → cluster → section pipeline that turns the
+WORKSPACE source tree into a file→symbol→import graph, clusters it from
+the entry points, ranks hub files by in-degree, and renders a compact
+CODEMAP digest section that reaches the planner/worker prompt through
+the normal digest slot (slot 2 of the five-slot prompt). No AST or
+tree-sitter: scoped regex extraction + structure conventions only.
+
+createCodegraph(deps) → { rebuild(), load() }:
+   a) walks the source tree under the memory directory,
+   b) classifies each file's role from path conventions (entry/module/
+      test/config/doc) — no parsing library,
+   c) extracts imports (import ... from, import, require, dynamic
+      import, export ... from) and exported symbols per file with
+      scoped regex; deterministic and CRASH-SAFE per file,
+   d) assembles the graph: relative imports resolve in-tree, externals
+      drop to a count, same-directory files get sibling edges,
+   e) clusters by entry-point BFS traversal and ranks hubs by in-degree,
+   f) renders the CODEMAP section (top hubs, orphan list, cluster
+      table, external count) trimmed to the token cap,
+   g) writes STATE/folder-12/codegraph.json + STATE/folder-12/report.md
+      and the CODEMAP section into STATE/digest.md — all through the
+      commons write path, so delta/compaction semantics apply unchanged,
+   h) emits codegraph.rebuilt { files, clusters, hubs } on the shared hub.
+
+=====================================================================
+2. FILE MAP
+=====================================================================
+parts/folder-12/package.json              npm manifest; scripts build/test; zod dep, TS devDeps
+parts/folder-12/package-lock.json         lockfile
+parts/folder-12/tsconfig.json             strict TS config; src/ → dist/
+parts/folder-12/INTEGRATION.txt           this file
+parts/folder-12/src/index.ts              public API barrel
+parts/folder-12/src/types.ts              WorkspaceGraph, GraphNode, GraphEdge, FileExtraction,
+                                           ClusterResult, HubInfo, CodegraphResult, FileRole, …
+parts/folder-12/src/detect.ts             classifyFileRole() — path-convention roles
+parts/folder-12/src/extract.ts            extractImports(), extractSymbols(), extractFromFile()
+                                           (scoped regex; NUL-byte malformed → logged skip)
+parts/folder-12/src/build.ts              buildGraph(), resolveImport() (in-tree resolution,
+                                           extension fallbacks, external/sibling edges)
+parts/folder-12/src/cluster.ts            clusterGraph() — entry BFS clusters, hub in-degree
+                                           ranking, orphan detection
+parts/folder-12/src/section.ts            renderCodegraphSection() (token-capped CODEMAP),
+                                           renderReport() (report.md)
+parts/folder-12/src/index.ts              createCodegraph(deps), fingerprintSourceTree()
+parts/folder-12/src/errors.ts             CommonsError (folder 'f12')
+parts/folder-12/src/barrel.ts             public API barrel
+parts/folder-12/src/smoke.test.ts         smoke tests (import-form fixtures, resolver in/out
+                                           of tree, golden cluster/hub math, token-cap behavior,
+                                           digest + planner-prompt integration, R6 both
+                                           directions, crash-safety probe, wiring hook)
+parts/folder-12/dist/                     compiled output
+
+=====================================================================
+3. PUBLIC INTERFACE
+=====================================================================
+export interface WorkspaceGraph { nodes: GraphNode[], edges: GraphEdge[],
+                                  externalCount: number, generatedAt: string }
+export interface GraphNode { id: string, kind: FileRole, symbols?: string[] }
+export interface GraphEdge { from: string, to: string, kind: 'imports' | 'sibling' }
+export type FileRole = 'entry' | 'module' | 'test' | 'config' | 'doc'
+export interface CodegraphResult { files: number, clusters: number, hubs: number,
+                                   graph: WorkspaceGraph, skipped: string[] }
+export interface CodegraphDeps { commons, bus, memoryDir, sourceTree, tokenCap? }
+export function createCodegraph(deps: CodegraphDeps): { rebuild(): Promise<CodegraphResult>,
+                                                         load(): Promise<WorkspaceGraph | null> }
+export function fingerprintSourceTree(root: string): Promise<string>
+export function classifyFileRole(relPath: string): FileRole
+export function extractFromFile(path: string, content: string): FileExtraction
+export function extractImports(content: string): ExtractedImport[]
+export function extractSymbols(content: string): ExtractedSymbol[]
+export function buildGraph(files: FileExtraction[]): WorkspaceGraph
+export function resolveImport(fromFile: string, source: string,
+                             knownFiles: Set<string>): string | null
+export function clusterGraph(graph: WorkspaceGraph): ClusterResult
+export function renderCodegraphSection(graph: WorkspaceGraph, clusters: ClusterResult,
+                                      tokenCap: number): string
+export function renderReport(graph: WorkspaceGraph, clusters: ClusterResult,
+                            skipped: string[]): string
+
+=====================================================================
+4. EXPECTS FROM OTHERS
+=====================================================================
+- folder-03 (COMMONS core): openCommons(memoryDir) → Commons{read, write, …}.
+  Used to read source-tree files and to write STATE/folder-12/codegraph.json,
+  STATE/folder-12/report.md and the CODEMAP section of STATE/digest.md
+  through the atomic diff-write path (DELTA rows, compaction/ARCHIVE
+  semantics preserved).
+- folder-01 (scaffold): the typed event catalog — codegraph.rebuilt is a NEW
+  EventName/EventPayloads member (R2; PROVENANCE event catalog updated).
+- folder-04 (compactor): estimateTokens(text) — consumed for the CODEMAP
+  section token cap (R1: the existing estimator; no second estimator in f12).
+- folder-07 (crew): buildPrompt's five-slot prompt — the CODEMAP section
+  reaches the planner/worker prompt through the NORMAL digest slot
+  (slot 2, STATE/digest.md). No separate injection channel is built.
+- The shared hub (src/wiring/event-hub.ts): the wiring-registered,
+  rate-limited rebuild hook subscribes to commons write events filtered
+  to paths under the source tree (see §8).
+
+=====================================================================
+5. PROVIDES TO OTHERS
+=====================================================================
+- createCodegraph(deps).rebuild(): full scan → graph → CODEMAP digest
+  section → state files → codegraph.rebuilt event. Returns
+  CodegraphResult (files/clusters/hubs counts, the graph, skipped paths).
+- createCodegraph(deps).load(): the last built graph from
+  STATE/folder-12/codegraph.json, or null when none exists.
+- STATE/folder-12/codegraph.json — nodes, edges (imports + sibling),
+  externalCount, generatedAt.
+- STATE/folder-12/report.md — human-readable report: counts, skipped
+  files (with the crash-safety probe's logged skips), hubs, clusters,
+  orphans.
+- The CODEMAP section inside STATE/digest.md — consumed by any prompt
+  that takes the digest slot (slot 2 of the five-slot prompt).
+- fingerprintSourceTree(root) — deterministic source-tree fingerprint
+  used by the wiring hook's rate limiting.
+
+=====================================================================
+6. CONFIG
+=====================================================================
+No environment variables. Token cap: CodegraphDeps.tokenCap, defaulting
+to 500; wiring passes the digest-token budget (config.budgets.digestTokens,
+default 2000). Section content is trimmed from the end until it fits the
+cap; the '## CODEMAP' header is never trimmed away. Roles/entry names/
+test/config/doc patterns are hard-coded path conventions in detect.ts.
+
+=====================================================================
+7. RUN STANDALONE
+=====================================================================
+cd parts/folder-12
+npm install
+npm run build      → tsc strict → dist/, exit 0
+npm test           → node --test dist/smoke.test.js, exit 0
+
+=====================================================================
+8. INTEGRATION NOTES
+=====================================================================
+- folder-12 does NOT import across folder boundaries at runtime; all
+  collaborators are constructor-injected via CodegraphDeps (the wiring
+  layer resolves them). Folder numbers in §4 are assumptions; the
+  interface is the contract.
+- R1: folder-12 consumes folder-04's estimateTokens for the CODEMAP
+  token cap. No second estimator is written inside f12.
+- R2: codegraph.rebuilt { files, clusters, hubs } is a NEW member of
+  the f01 EventName/EventPayloads closed set with a NEW payload type;
+  existing events are never repurposed. PROVENANCE event catalog
+  updated accordingly.
+- R6: CODEMAP is REGENERABLE STATE, not pinned memory. Compaction may
+  demote the CODEMAP digest section — that is correct behavior; the
+  next rebuild restores it. CODEMAP is never added to PINS. Both
+  directions are covered by tests: (a) a compaction run with a CODEMAP
+  section present produces a valid digest, (b) a rebuild after such
+  compaction restores the section.
+- CRASH-SAFETY: extraction is per-file isolated. A file whose read
+  fails, or whose content is malformed as text (NUL byte), yields a
+  logged skip (console + result.skipped + report.md) — never a failed
+  rebuild. The crash-safety probe proves a workspace with one malformed
+  file still rebuilds a complete graph.
+- Rebuild triggers: the explicit CLI surface (`deck codegraph build`,
+  registered in the Phase-10 command table; the rebuild itself runs
+  through the wired composition root WiredDeck.f12.rebuildCodegraph,
+  consistent with the declarative command table) AND a wiring-
+  registered, rate-limited hook on commons write events: the hook
+  filters to paths under the source tree only and is fingerprint-
+  gated, so identical states never rebuild.
+- v1 BOUNDARY: no tree-sitter/AST parsers (heavy, brittle). Regex
+  extraction + structure conventions are enough for hubs/orphans/
+  dead-code candidate reporting. An AST backend may later slot behind
+  extract.ts without schema changes (FileExtraction is the seam).
+
+=====================================================================
+9. DO NOT CHANGE
+=====================================================================
+- createCodegraph(deps) → { rebuild(), load() } must remain the public
+  entry point.
+- WorkspaceGraph / GraphNode / GraphEdge shapes must not change;
+  GraphNode.id is the symlink label (file path); GraphEdge.kind is
+  'imports' | 'sibling' only.
+- codegraph.rebuilt payload is { files, clusters, hubs } as typed in
+  f01 EventPayloads; the event name must not be repurposed.
+- STATE/folder-12/codegraph.json + STATE/folder-12/report.md paths and
+  the CODEMAP section heading ('## CODEMAP') must not change.
+- TypeScript strict mode, no-any policy, zod for validation preserved.

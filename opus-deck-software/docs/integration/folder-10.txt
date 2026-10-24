@@ -1,0 +1,105 @@
+1. WHAT I BUILT
+- CLI & surface plugin for COMMONS: registers five /opus commands (run, status, crew, report, config), renders a live dashboard driven entirely by bus events, provides human formatting (tokens, durations, ANSI severities), and ships a graceful Ctrl-C abort that emits run.failed with reason 'aborted'.
+- Provides pure render + format helpers that reconstruct dashboard state from a full event replay (DELTA) for mid-run opens.
+- Provides a working stubs.ts with event bus, commons client, transport, locks, task queue, working set, artifact store, task bus for standalone builds.
+- Throws CommonsError { code, folder: 'folder-10', detail } on every failure.
+- Standalone (TypeScript strict, Node 20+, zod dep) passes `npm run build` and `npm test` with 13 smoke tests covering all public exports.
+
+2. FILE MAP
+- package.json — manifest, scripts (build/typecheck/test/smoke/verify), deps (zod + dev deps).
+- tsconfig.json — strict TS config, rootDir ".", outDir "dist", includes src + test.
+- src/types.ts — types only (types.ts): Task, PresenceEntry, WorkingSetEntry, BusEvent*, RunConfig, CommonsClient, TransportClient, LockClient, TaskQueue, WorkingSetStore, TaskBus, ArtifactStore, EventBus, CommonsWriteArgs.
+- src/format.ts — human formatting helpers: formatTokens, formatDuration, formatSeverity, SeverityColor, ResetColor.
+- src/abort.ts — registerAbort export (SIGINT handler).
+- src/commands.ts — Commands map (run/status/crew/report/config) + CommandHandler type.
+- src/dashboard.ts — renderDashboard + replayFromDelta pure renderers.
+- src/stubs.ts — working stub implementations for all cross-part interfaces.
+- src/index.ts — public API as named exports.
+- test/smoke.test.ts — smoke tests (node:test), 13 tests.
+- INTEGRATION.txt — this file.
+
+3. PUBLIC INTERFACE
+// Exact copy-pasteable TypeScript signatures (subset is the publicly usable surface)
+export class CommonsError extends Error { code: string; folder: 'folder-10'; detail?: string; }
+export type FolderId = 'folder-10';
+export interface Task { readonly id: string; readonly title?: string; readonly description?: string; readonly status?: 'pending'|'claimed'|'completed'|'failed'|'retired'; readonly claimSet?: readonly string[]; readonly locks?: readonly string[]; readonly priority?: number; readonly metadata?: Readonly<Record<string, unknown>>; }
+export interface PresenceEntry { readonly modelId: string; readonly role?: string; readonly status?: string; readonly taskIds?: readonly string[]; readonly claimed?: readonly string[]; readonly lastSeen?: string; readonly metadata?: Readonly<Record<string, unknown>>; }
+export interface WorkingSetEntry { readonly modelId?: string; readonly path: string; readonly startLine?: number; readonly endLine?: number; readonly range?: { readonly startLine: number; readonly endLine: number; }; readonly content?: string; readonly pointer?: boolean; readonly tokenCount?: number; readonly updatedAt?: string; }
+export type BusEvent = 'run.started' | 'run.failed' | 'run.completed' | 'task.claimed' | 'task.completed' | 'task.failed' | 'task.retired' | 'finding.new' | 'finding.resolved' | 'phase.change' | 'token.use' | 'ctrl-c';
+export interface EventBus { emit(event: string, ...args: unknown[]): void; on(event: string, handler: (...args: unknown[]) => void): void; once(event: string, handler: (...args: unknown[]) => void): void; off(event: string, handler: (...args: unknown[]) => void): void; publish?(event: string, ...args: unknown[]): void; subscribe?(event: string, handler: (...args: unknown[]) => void): void; waitFor?(event: string, timeoutMs?: number): Promise<unknown>; }
+export interface RunConfig { readonly brief: string; readonly goalState: string; readonly crew: readonly string[]; readonly keys?: Readonly<Record<string, string>> | undefined; }
+export interface CommandHandler { (...args: readonly string[]): Promise<void> | void; }
+
+export const SeverityColor: Readonly<Record<'critical'|'high'|'medium'|'low', string>> = ...;
+export const ResetColor: string;
+export function formatTokens(budget: number, used: number): string;
+export function formatDuration(ms: number): string;
+export function formatSeverity(severity: 'critical'|'high'|'medium'|'low', resolved: boolean): string;
+export function registerAbort(bus: EventBus, runId: string, releaseLocks: () => Promise<void>): void;
+export function renderDashboard(state: DashboardState): string; // DashboardState is internal; use replayFromDelta to build it.
+export function replayFromDelta(events: readonly [string, unknown][], runId: string): DashboardState;
+export const Commands: Map<string, CommandHandler>;
+
+// Stubs / factory surface (from ./stubs.ts, re-exported):
+export function getDefaultBus(): EventBus;
+export function createEventBus(): EventBus;
+export function getDefaultCommons(): CommonsClient;
+export function createCommons(): CommonsClient;
+export function getDefaultTransport(): TransportClient;
+export function createTransport(): TransportClient;
+export function getDefaultLocks(): LockClient;
+export function createLocks(): LockClient;
+export class InMemoryTaskQueue { constructor(tasks: readonly Task[]); claimNext(workerId: string): Task | null; retire(workerId: string): void; remaining(): number; tasks: Task[]; }
+export function createTaskQueue(tasks: readonly Task[]): TaskQueue;
+export function getDefaultWorkingSet(): WorkingSetStore;
+export function createWorkingSetStore(): WorkingSetStore;
+export function createArtifactStore(): ArtifactStore;
+export class StubTaskBus implements TaskBus { ... }
+export class StubEventBus implements EventBus { ... }
+export class StubCommonsClient implements CommonsClient { writes: CommonsWriteArgs[]; }
+export class StubTransport implements TransportClient;
+export class StubLockClient implements LockClient;
+export class StubWorkingSetStore implements WorkingSetStore;
+export class StubArtifactStore implements ArtifactStore;
+
+4. EXPECTS FROM OTHERS
+- folder 01 or any part: EventBus (src/types.ts EventBus) and run events on the bus. Stubbed via createEventBus/getDefaultBus in src/stubs.ts.
+- folder 02 or any part: CommonsClient (COMMONS file access). Stubbed via createCommons/getDefaultCommons in src/stubs.ts.
+- Placeholder for 'registry': roster + healthCheck (model health). No typed interface stubbed yet; commands.ts references it as comment only. Integrator MUST provide a registry callable with healthCheck returning { modelId, healthy }[].
+- The dashboard only reads bus events; if other parts emit additional events they flow through as long as the bus is shared.
+
+5. PROVIDES TO OTHERS
+- Commands map: integrator registers Commands.get('run') etc. as opencode plugin command handlers.
+- formatTokens, formatDuration, formatSeverity: formatters usable by any printer.
+- renderDashboard / replayFromDelta: integrator can render dashboard by passing state built from replayFromDelta(events, runId).
+- registerAbort: wire a Ctrl-C handler for SIGINT in the run lifecycle.
+- Types: EventBus, BusEvent*, RunConfig, Task, PresenceEntry, WorkingSetEntry for cross-part glue.
+- Stubs (stubs.ts): working in-memory implementations of every cross-part interface folder-10 expects, so the plugin builds standalone.
+
+6. CONFIG
+- COMMONS_PROMPT_TOKEN_BUDGET (number, default 4000): prompt compaction memory budget; consumed indirectly through other parts.
+- No env vars beyond those inherited from other parts; folder-10 reads none of its own beyond standard process signals.
+
+7. RUN STANDALONE
+- npm install
+- npm run build        → exit 0 (tsc strict)
+- npm test             → exit 0, "tests 13, pass 13, fail 0"
+- verify all exports covered by the 13 smoke tests in test/smoke.test.ts.
+
+8. INTEGRATION NOTES
+- Dashboard does not throttle re-render; high event rates may produce many renders. Integrator may add debounce.
+- Commands assume no args; integrator may accept arguments if extended.
+- abort.ts's registerAbort currently only registers one handler per process; calling again is a no-op. Re-running a new run requires a fresh process.
+- Task/finding IDs and disk state come from other parts via events; folder-10 does not write to COMMONS.
+- The RUN STANDALONE banner printed to stderr on abort is a placeholder; DELTA pointer is a plain message.
+- registry integration gap: healthCheck shape not typed (OPEN: add a Registry interface in types.ts under a follow-up).
+- Node 20+ required; npm test relies on node:test.
+
+9. DO NOT CHANGE
+- Keep CommonsError shape: { code: string, folder: 'folder-10', detail?: string }.
+- Keep formatDuration output `mm:ss.t` (tenths) and formatTokens `X.Yk / Z.ZM`.
+- Phase order must remain: plan -> build -> audit -> patch -> review -> merge.
+- Finding feed MUST remain severity-sorted with resolved struck through (dim).
+- registerAbort MUST emit 'run.failed' with reason 'aborted' and exit non-zero.
+- All failures MUST throw CommonsError.
+- Public exports (index.ts) names must not be removed without updating tests + INTEGRATION.txt §3.

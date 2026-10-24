@@ -1,0 +1,219 @@
+=== folder-04 — THE COMPACTOR ===
+
+1. WHAT I BUILT
+---------------
+The Compactor: the only component allowed to shrink what a working model
+receives from COMMONS. It chunks STATE/digest.md on blank lines (lists and
+sections are never split mid-way), compresses each chunk through a cheap LLM
+via Transport using a fixed system prompt, merges the five required sections
+(ARCH, IFACE, OPEN, SETTLED, PINS), guarantees PINS survive every compaction,
+writes the new digest atomically, archives the previous digest as
+ARCHIVE/digest@vN.md with a superseded pointer line, and emits
+'compaction.done'. It is idempotent: if digest+DELTA are unchanged since the
+last run it returns ran:false. It also exposes a pure LRU working-set
+reducer (reduceWorkingSet) that drops read ranges into one-line pointers
+under a prompt-token budget. Zero runtime dependencies (zod permitted but
+not needed — options are hand-validated).
+
+2. FILE MAP
+-----------
+package.json            — npm metadata; scripts build/test; zero runtime deps.
+tsconfig.json           — strict tsc config, NodeNext ESM, outDir dist.
+src/types.ts            — all type contracts incl. Transport/Commons/EventBus I expect.
+src/errors.ts           — CommonsError (code, folder:'folder-04', detail?).
+src/compactor.ts        — Compactor class + pure helpers (chunking, parsing, LRU reduction).
+src/stubs.ts            — working stubs: MemoryCommons, MemoryBus, EchoTransport.
+src/index.ts            — public named exports (the only import surface).
+src/compactor.test.ts   — node:test smoke tests, one+ per public export.
+INTEGRATION.txt         — this file.
+
+3. PUBLIC INTERFACE (all named exports from src/index.ts)
+---------------------------------------------------------
+export class CommonsError extends Error {
+  constructor(code: string, message: string, detail?: string);
+  code: string;                // machine-readable code, e.g. 'DIGEST_MISSING'
+  folder: 'folder-04';
+  detail?: string;
+}
+
+export class Compactor {
+  constructor(
+    deps: { transport: Transport; commons: Commons; bus: EventBus },
+    options?: CompactorOptions,
+  );
+  watch(): void;               // idempotent; subscribes budget events + 'compaction.requested'
+  compact(force?: boolean): Promise<CompactionResult>;
+  unpin(query: string): Promise<number>;   // ONLY way a pin is removed; returns count removed
+  reduceWorkingSet(ranges: ReadRange[], budget?: number): WorkingSetReduction;
+}
+
+export function estimateTokens(text: string): number;
+export function chunkDigest(digest: string): string[];
+export function parseSections(md: string): Map<SectionName, string[]>;
+export function extractPins(digest: string): string[];
+export function rangeTokens(range: ReadRange): number;
+export function reduceWorkingSet(ranges: ReadRange[], promptTokensBudget: number): WorkingSetReduction;
+export const COMPACTOR_SYSTEM_PROMPT: string;
+export const SECTION_NAMES: readonly ['ARCH', 'IFACE', 'OPEN', 'SETTLED', 'PINS'];
+export type SectionName = 'ARCH' | 'IFACE' | 'OPEN' | 'SETTLED' | 'PINS';
+
+// Working stubs (replace at integration; usable now for tests):
+export class MemoryCommons implements Commons {
+  constructor();
+  seed(path: string, content: string): void;   // test helper
+  read(p: string): Promise<string>;            // rejects CommonsError 'NOT_FOUND'
+  exists(p: string): Promise<boolean>;
+  write(p: string, c: string): Promise<void>;
+  append(p: string, c: string): Promise<void>;
+  list(dir: string): Promise<string[]>;
+}
+export class MemoryBus implements EventBus {
+  subscribe(event: string, h: (p: unknown) => void | Promise<void>): void;
+  emit(event: string, payload?: unknown): Promise<void>;
+}
+export class EchoTransport implements Transport {
+  chat(req: LlmRequest): Promise<LlmResponse>; // deterministic lossy 5-section response
+}
+
+// Type-only re-exports:
+export type { LlmMessage, LlmRequest, LlmResponse, Transport, Commons, EventBus,
+  CompactionResult, CompactorOptions, ReadRange, RangePointer, WorkingSetReduction };
+
+export interface CompactionResult {
+  beforeTokens: number; afterTokens: number; demotedToArchive: number; ran: boolean;
+}
+export interface CompactorOptions {
+  digestTokenBudget?: number;    // default 2000
+  promptTokensBudget?: number;   // default 8000
+  llmModel?: string;             // default 'compactor-small'
+  budgetCheckEvents?: string[];  // default ['commons.changed','digest.updated']
+}
+export interface ReadRange {
+  path: string; startLine: number; endLine: number; lastUsed: number; tokens?: number;
+}
+export interface RangePointer { path: string; startLine: number; endLine: number; pointer: string; }
+export interface WorkingSetReduction {
+  kept: ReadRange[]; dropped: RangePointer[]; tokensBefore: number; tokensAfter: number;
+}
+
+4. EXPECTS FROM OTHERS
+----------------------
+I cannot see other folders; owner numbers below are unknown to me — the
+integrator must map them. Exact interfaces I coded against:
+
+a) COMMONS STORAGE (owner folder unknown; likely the COMMONS/filesystem part):
+export interface Commons {
+  read(path: string): Promise<string>;      // path relative to COMMONS root, e.g. 'STATE/digest.md'
+  exists(path: string): Promise<boolean>;
+  write(path: string, content: string): Promise<void>; // MUST be atomic (temp+rename)
+  append(path: string, content: string): Promise<void>;
+  list(dir: string): Promise<string[]>;     // relative paths incl. dir prefix, files only, non-recursive, sorted
+}
+Used paths: 'STATE/digest.md', 'DELTA/*' (list + read, .md only), 'ARCHIVE/' (list).
+DELTA files are read-only for me; I never move or delete anything.
+
+b) EVENT BUS (owner folder unknown):
+export interface EventBus {
+  emit(event: string, payload?: unknown): void | Promise<void>;
+  subscribe(event: string, handler: (payload: unknown) => void | Promise<void>): void;
+}
+Events I subscribe to: 'compaction.requested' (payload ignored) and
+budgetCheckEvents (default 'commons.changed', 'digest.updated'; payload
+ignored). If producers use different names, pass them via
+CompactorOptions.budgetCheckEvents.
+
+c) TRANSPORT (owner folder unknown; likely the LLM transport part):
+export interface Transport {
+  chat(req: { system?: string; messages: { role: 'system'|'user'|'assistant'; content: string }[];
+              model?: string; maxTokens?: number; temperature?: number }): Promise<{ text: string; }>;
+}
+I request model name 'compactor-small' (configurable); I only consume res.text.
+
+d) WORKER POOL (owner folder unknown): supplies per-model LRU ReadRange[]
+lists to reduceWorkingSet()/Compactor#reduceWorkingSet and embeds the
+returned one-line `pointer` strings into model prompts.
+
+5. PROVIDES TO OTHERS
+---------------------
+- Compactor: orchestrator/lead instantiates it with the real deps and calls
+  watch() once at startup; any part may call compact()/unpin() explicitly.
+- reduceWorkingSet (pure function): the worker pool should call it before
+  building a model prompt to enforce the promptTokens budget; dropped ranges
+  come back as pointer lines, contents re-read from COMMONS on demand.
+- Bus events I emit: 'compaction.done' (payload = CompactionResult) and
+  'compaction.error' (payload = { code: string; message: string }).
+- Canonical TypeScript shapes for Transport/Commons/EventBus/ReadRange —
+  other parts may import these types from folder-04 instead of duplicating.
+- Working stubs (MemoryCommons/MemoryBus/EchoTransport) usable by other
+  parts' tests until integration.
+
+6. CONFIG
+---------
+No environment variables are read. All configuration is via CompactorOptions
+(constructor arg):
+  digestTokenBudget   number  default 2000   Digest budget in estimated tokens; triggers compaction on budget-check events when estimateTokens(digest) > budget.
+  promptTokensBudget  number  default 8000   Default budget for Compactor#reduceWorkingSet when no explicit budget is passed.
+  llmModel            string  default 'compactor-small'  Model name sent to Transport.chat (the small/cheap compactor model).
+  budgetCheckEvents   string[] default ['commons.changed','digest.updated']  Bus events that trigger a digest-budget check.
+
+7. RUN STANDALONE
+-----------------
+  cd parts/folder-04
+  npm install
+  npm run build      # tsc strict -> dist/, exit 0
+  npm test           # builds, then node --test dist/
+Expected: 17 passing tests, exit code 0.
+No output other than the node:test TAP-ish summary is produced.
+
+8. INTEGRATION NOTES
+--------------------
+1. Token counts are ESTIMATES: ceil(chars/4), no tokenizer dependency.
+   rangeTokens defaults to 10 tokens/line when ReadRange.tokens is absent.
+2. The spec's "CompileOptions arg" is interpreted as a typo for the
+   compactor's options object; I named it CompactorOptions.
+3. demotedToArchive = number of digest chunks compressed this run (their
+   full original text now exists only in ARCHIVE/digest@vN.md).
+4. DELTA entries are read for the fingerprint and LLM context but never
+   moved/deleted — COMMONS is unbounded by contract.
+5. The idempotency fingerprint (sha256 of digest + DELTA contents) lives in
+   memory only. After a process restart the first compact() may run once
+   redundantly; harmless (creates the next vN).
+6. Re-entrant compact() while a compaction is in flight returns ran:false.
+7. compact(force=true) bypasses the fingerprint check (used by tests; also
+   useful if the digest is over budget but unchanged).
+8. unpin() edits STATE/digest.md in place without a version bump or archive
+   copy. Matching is substring containment on trimmed PINS lines.
+9. PINS after compaction = union(previous digest PINS, LLM PINS), deduped by
+   trimmed line equality, order preserved.
+10. Chunking: a new chunk starts at a markdown heading (#{1,6}) or a bare
+    section label; list items and plain paragraphs attach to the previous
+    chunk. No per-chunk size cap — one very large section = one LLM call.
+11. If ARCHIVE/ is unreadable, versioning restarts at v1 (overwrite risk in
+    a real Commons — ensure list('ARCHIVE') works).
+12. If the post-archive digest write fails, ARCHIVE has vN but the live
+    digest is untouched; retrying is safe (next version = N+1).
+13. Zero runtime dependencies. zod was permitted but hand-validation was
+    simpler; no `any` is used anywhere.
+14. DELIBERATELY NOT BUILT (future ideas only): semantic index, vector
+    store, response caching, per-chunk size caps, DELTA rotation, persistent
+    fingerprint, pin storage in a separate STATE/pins.md.
+15. Line endings: algorithm splits on \n only; CRLF digests will degrade
+    chunking (Commons owner should normalize to \n).
+16. Watch() handlers never throw; failures surface as 'compaction.error'.
+
+9. DO NOT CHANGE
+----------------
+- PINS survival: nothing under PINS is ever dropped by compaction; removal
+  happens ONLY via unpin(). No exceptions.
+- Idempotency heartbeat: compact() on unchanged digest+DELTA MUST return
+  { ran: false, beforeTokens: 0, afterTokens: 0, demotedToArchive: 0 }.
+- Event names/payloads: consumed 'compaction.requested'; emitted
+  'compaction.done' (CompactionResult) and 'compaction.error' ({code,message}).
+- COMPACTOR_SYSTEM_PROMPT text is spec-fixed; do not reword it.
+- Archive naming ARCHIVE/digest@vN.md and the pointer line
+  "(superseded -> ARCHIVE/digest@vN.md)".
+- Digest section order: ARCH, IFACE, OPEN, SETTLED, PINS.
+- CompactionResult field names and shapes.
+- Every thrown error must be CommonsError with folder === 'folder-04'.
+- COMMONS is append/never-delete: the compactor never deletes or rewrites
+  any file except STATE/digest.md, and never removes files from DELTA/.

@@ -1,0 +1,19 @@
+{
+  "name": "ruic-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ruic engine - multi-model AI software-orchestration engine (LEAD / ENGINEER / SECURITY crew over shared COMMONS memory).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test \"dist/**/*.test.js\""
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.5.0"
+  }
+}

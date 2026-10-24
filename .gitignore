@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+
+# Run artifacts
+app/OUTPUT/
+**/OUTPUT/
+COMMONS/DELTA/
+COMMONS/STATE/
+COMMONS/WORKSPACE/
+COMMONS/ARCHIVE/
+
+# Secrets — never publish
+keystores/
+.env
+.env.*
+
+# Logs & OS junk
+*.log
+.DS_Store
+Thumbs.db
