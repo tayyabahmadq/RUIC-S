@@ -276,8 +276,9 @@ function render(): void {
   const phaseStrip = byId<HTMLElement>('phaseStrip')
   if (phaseStrip !== null) {
     phaseStrip.textContent = `Phase: ${deckState.phase}`
-    phaseStrip.className = `phase-strip phase-${deckState.phase}`
+    phaseStrip.className = `chip sea`
   }
+  renderOverviewStats()
 
   const timer = byId<HTMLElement>('elapsedTimer')
   if (timer !== null) timer.textContent = formatDuration(liveElapsedMs())
@@ -334,31 +335,13 @@ function render(): void {
   }
 
   // Common-S: routing + economic-layer visibility (Laya decisions, Zeak
-  // fallbacks/early-stops, Data Collection) render above the findings feed.
+  // fallbacks/early-stops, Data Collection) in the overview + findings feeds.
   const strip = byId<HTMLElement>('phaseStrip')
   if (strip !== null && deckState.routingNotes.length > 0) {
     strip.title = deckState.routingNotes.join('\n')
   }
-  const findingsSection = findingsList?.parentElement ?? null
-  if (findingsList !== null && findingsSection !== null) {
-    let routingBox = byId<HTMLElement>('routingFeed')
-    if (routingBox === null) {
-      routingBox = document.createElement('div')
-      routingBox.id = 'routingFeed'
-      routingBox.className = 'findings-list'
-      findingsSection.parentElement?.insertBefore(routingBox, findingsSection)
-    }
-    clearChildren(routingBox)
-    for (const note of deckState.routingNotes.slice(-20)) {
-      const item = document.createElement('div')
-      item.className = 'finding-item'
-      const msg = document.createElement('div')
-      msg.className = 'finding-msg'
-      msg.textContent = note
-      item.appendChild(msg)
-      routingBox.appendChild(item)
-    }
-  }
+  renderRoutingNotes('overviewRouting', 'overviewRoutingEmpty')
+  renderRoutingNotes('routingFeedHolder', null)
 
   /* ---- Preview surface (R16) ---- */
   const previewPanel = byId<HTMLElement>('previewPanel')
@@ -367,15 +350,9 @@ function render(): void {
   const previewCloseBtn = byId<HTMLButtonElement>('previewCloseBtn')
 
   if (previewPanel !== null) {
-    if (deckPreviewOpen) {
-      previewPanel.style.display = 'block'
-      if (previewOpenBtn !== null) previewOpenBtn.disabled = true
-      if (previewCloseBtn !== null) previewCloseBtn.disabled = false
-    } else {
-      previewPanel.style.display = 'none'
-      if (previewOpenBtn !== null) previewOpenBtn.disabled = false
-      if (previewCloseBtn !== null) previewCloseBtn.disabled = true
-    }
+    previewPanel.classList.toggle('preview-open', deckPreviewOpen)
+    if (previewOpenBtn !== null) previewOpenBtn.disabled = deckPreviewOpen
+    if (previewCloseBtn !== null) previewCloseBtn.disabled = !deckPreviewOpen
   }
 
   if (previewFileList !== null) {
@@ -413,10 +390,141 @@ function render(): void {
     if (deckState.crewHealth.length === 0) {
       const empty = document.createElement('div')
       empty.className = 'crew-empty'
-      empty.textContent = 'connectingâ€¦'
+      empty.textContent = 'connecting...'
       roster.appendChild(empty)
     }
   }
+
+  const rosterBig = byId<HTMLElement>('crewRosterBig')
+  if (rosterBig !== null) {
+    clearChildren(rosterBig)
+    for (const member of deckState.crewHealth) {
+      const card = document.createElement('div')
+      card.className = 'panel'
+      const head = document.createElement('div')
+      head.className = 'phead'
+      const name = document.createElement('span')
+      name.textContent = `${member.id} (${member.role})`
+      head.appendChild(name)
+      const status = document.createElement('span')
+      status.className = `chip ${member.healthy ? 'mint' : 'mut'}`
+      status.textContent = member.healthy ? 'healthy' : 'unhealthy'
+      head.appendChild(status)
+      card.appendChild(head)
+      const body = document.createElement('div')
+      body.className = 'pbody'
+      body.innerHTML = '<div style="font:11px var(--mono);color:var(--muted)">stateless worker · swappable via config</div>'
+      card.appendChild(body)
+      rosterBig.appendChild(card)
+    }
+    if (deckState.crewHealth.length === 0) {
+      rosterBig.innerHTML = '<div class="crew-empty">probing crew health...</div>'
+    }
+  }
+
+  renderStream()
+
+  const bridgeStatusEl = byId<HTMLElement>('bridgeStatus')
+  const sbBridge = byId<HTMLElement>('sbBridge')
+  if (sbBridge !== null && bridgeStatusEl !== null) {
+    sbBridge.textContent = bridgeStatusEl.textContent !== null && bridgeStatusEl.textContent.startsWith('Bridge: connected') ? '● bridge live' : '● bridge down'
+  }
+  const findingsBadge = byId<HTMLElement>('findingsBadge')
+  if (findingsBadge !== null) {
+    const open = deckState.findings.filter((f) => !f.resolved).length
+    findingsBadge.textContent = String(open)
+    findingsBadge.style.display = open > 0 ? '' : 'none'
+  }
+}
+
+/* ── presentation helpers (view layer only — no bridge/logic changes) ── */
+
+const PHASE_CAPS: Record<string, string> = {
+  idle: 'the crew is at rest',
+  planning: 'laya routing + leader planning',
+  building: 'engineers executing claimed tasks',
+  auditing: 'security department scanning diffs',
+  patching: 'remediation batches applying',
+  reviewing: 'review agent diff-review',
+  merging: 'merge engine assembling output',
+  completed: 'run signed off — output ready',
+  failed: 'run failed — check the event stream',
+}
+
+function renderOverviewStats(): void {
+  const phase = byId<HTMLElement>('statPhase')
+  if (phase !== null) phase.textContent = deckState.phase
+  const phaseCap = byId<HTMLElement>('statPhaseCap')
+  if (phaseCap !== null) phaseCap.textContent = PHASE_CAPS[deckState.phase] ?? ''
+  const tokens = byId<HTMLElement>('statTokens')
+  if (tokens !== null) tokens.textContent = deckState.tokenSpend.toLocaleString('en-US')
+  const bar = byId<HTMLElement>('tokenBar')
+  if (bar !== null) bar.style.width = `${Math.min(100, Math.round(deckState.tokenSpend / 2500))}%`
+  const tasks = byId<HTMLElement>('statTasks')
+  if (tasks !== null) {
+    const done = deckState.tasks.filter((t) => t.status === 'completed').length
+    tasks.textContent = `${done}/${deckState.tasks.length}`
+  }
+  const findings = byId<HTMLElement>('statFindings')
+  if (findings !== null) findings.textContent = String(deckState.findings.length)
+  const runChip = byId<HTMLElement>('runIdChip')
+  if (runChip !== null) runChip.textContent = deckState.runId !== '' ? deckState.runId : 'IDLE'
+  const runTitle = byId<HTMLElement>('runTitle')
+  if (runTitle !== null) {
+    runTitle.textContent = deckRunning
+      ? 'Governed run in progress'
+      : deckState.phase === 'completed'
+        ? 'Run completed — output ready to preview'
+        : 'Awaiting a brief — nothing is running'
+  }
+  const elapsedChip = byId<HTMLElement>('elapsedChip')
+  if (elapsedChip !== null) elapsedChip.textContent = formatDuration(liveElapsedMs())
+}
+
+function renderRoutingNotes(holderId: string, emptyId: string | null): void {
+  const holder = byId<HTMLElement>(holderId)
+  if (holder === null) return
+  clearChildren(holder)
+  const empty = emptyId !== null ? byId<HTMLElement>(emptyId) : null
+  if (empty !== null) empty.style.display = deckState.routingNotes.length === 0 ? '' : 'none'
+  for (const note of deckState.routingNotes.slice(-20)) {
+    const row = document.createElement('div')
+    row.className = 'feedrow'
+    const tag = document.createElement('span')
+    tag.className = 'tg'
+    tag.textContent = note.startsWith('Laya') ? 'laya' : note.startsWith('Zeak') ? 'zeak' : 'collector'
+    const txt = document.createElement('span')
+    txt.textContent = note
+    row.appendChild(tag)
+    row.appendChild(txt)
+    holder.appendChild(row)
+  }
+}
+
+function renderStream(): void {
+  const list = byId<HTMLElement>('streamList')
+  if (list === null) return
+  clearChildren(list)
+  let i = 0
+  for (const event of deckEvents.slice(-80)) {
+    const row = document.createElement('div')
+    row.className = i % 2 === 1 ? 'streamrow alt' : 'streamrow'
+    const time = document.createElement('time')
+    time.textContent = event.at.slice(11, 19)
+    const tag = document.createElement('span')
+    tag.className = 'tg'
+    tag.textContent = event.type
+    const tx = document.createElement('span')
+    tx.className = 'tx'
+    tx.textContent = JSON.stringify(event.payload).slice(0, 220)
+    row.appendChild(time)
+    row.appendChild(tag)
+    row.appendChild(tx)
+    list.appendChild(row)
+    i += 1
+  }
+  const chat = byId<HTMLElement>('streamChat')
+  if (chat !== null) chat.scrollTop = chat.scrollHeight
 }
 
 /* ------------------------------------------------------------------ *
@@ -518,7 +626,24 @@ function setStatus(text: string, connected: boolean): void {
   const status = byId<HTMLElement>('bridgeStatus')
   if (status !== null) {
     status.textContent = text
-    status.className = `status-indicator ${connected ? 'status-connected' : 'status-error'}`
+    status.className = `chip ${connected ? 'mint' : 'mut'}`
+  }
+}
+
+/* View switcher: presentation-only navigation between the shell views. */
+function initViews(): void {
+  const navItems = document.querySelectorAll<HTMLElement>('.navitem')
+  for (const item of Array.from(navItems)) {
+    item.addEventListener('click', () => {
+      const target = item.getAttribute('data-nav')
+      if (target === null) return
+      for (const other of Array.from(navItems)) {
+        other.classList.toggle('on', other === item)
+      }
+      for (const view of Array.from(document.querySelectorAll<HTMLElement>('.view'))) {
+        view.classList.toggle('on', view.id === `v-${target}`)
+      }
+    })
   }
 }
 
@@ -550,6 +675,7 @@ async function boot(): Promise<void> {
 }
 
 function mount(): void {
+  initViews()
   const runBtn = byId<HTMLButtonElement>('runBtn')
   if (runBtn !== null) runBtn.addEventListener('click', () => { void handleRun() })
   const abortBtn = byId<HTMLButtonElement>('abortBtn')

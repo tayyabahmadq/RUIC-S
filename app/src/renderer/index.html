@@ -8,83 +8,170 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="shell">
-    <header class="shell-header">
-      <h1>Ruic — Control Deck</h1>
-      <div class="phase-strip" id="phaseStrip">Phase: idle</div>
-      <div class="timer" id="elapsedTimer">00:00:00</div>
-      <div class="tokens" id="tokenSpend">Tokens: 0</div>
+  <div class="win">
+
+    <!-- ── title bar ── -->
+    <header class="titlebar">
+      <div class="brand">RUIC<em>//</em>DECK <span class="sub">COMMON-S AUTONOMOUS SYSTEM</span></div>
+      <div class="tb-right">
+        <span id="phaseStrip" class="chip sea">Phase: idle</span>
+        <span id="bridgeStatus" class="chip mut">Bridge: disconnected</span>
+        <span class="chip hide-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:9px;height:9px"><rect x="6" y="10.5" width="12" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>LOCAL-ONLY</span>
+      </div>
     </header>
 
-    <div class="body">
-      <aside class="sidebar">
-        <section class="card">
-          <h2>Brief &amp; Goal</h2>
-          <textarea id="briefInput" placeholder="Enter your brief..."></textarea>
-          <textarea id="goalInput" placeholder="Goal state (comma-separated criteria)..."></textarea>
-        </section>
+    <div class="shell">
+      <!-- ── sidebar nav ── -->
+      <nav class="sidebar">
+        <div class="navhead">Workspace</div>
+        <div class="nav">
+          <button class="navitem on" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-4"/></svg><span class="lb">Run Overview</span></button>
+          <button class="navitem" data-nav="command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3L5 13.5h5L10.5 21 19 10.5h-5z"/></svg><span class="lb">Command</span></button>
+          <button class="navitem" data-nav="findings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l6.5 2.7v4.6c0 4.2-2.7 7-6.5 8.7-3.8-1.7-6.5-4.5-6.5-8.7V6.2z"/><path d="M12 8.8v3.4"/><path d="M12 15.2h.01"/></svg><span class="lb">Findings</span><span class="navbadge" id="findingsBadge" style="display:none">0</span></button>
+          <button class="navitem" data-nav="crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.5" cy="8.5" r="3"/><path d="M4 19c.5-3 2.7-4.5 5.5-4.5s5 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M17.5 14.6c2.3.4 3.7 1.8 4 4.4"/></svg><span class="lb">Crew</span></button>
+          <button class="navitem" data-nav="preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.5h17"/></svg><span class="lb">Preview</span></button>
+          <button class="navitem" data-nav="stream"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v10.5H9l-5 4z"/></svg><span class="lb">Event Stream</span></button>
+        </div>
+        <div class="sidefoot">
+          <div class="keybtn"><span class="dot mint"></span>keystore · main-only keys</div>
+          <div class="engln"><i class="dot mint blink"></i>common-s · brain online</div>
+        </div>
+      </nav>
 
-        <section class="card">
-          <h2>Crew</h2>
-          <div id="crewRoster" class="crew-roster"></div>
-        </section>
+      <!-- ── main views ── -->
+      <main class="main" id="main">
+        <div class="viewwrap">
 
-        <section class="card actions">
-          <h2>Actions</h2>
-          <button id="runBtn" class="btn-primary">Run Deck</button>
-          <button id="abortBtn" class="btn-danger" disabled>Abort</button>
-        </section>
-
-        <section class="card status">
-          <h2>Connection</h2>
-          <div id="bridgeStatus" class="status-indicator status-error">Bridge: disconnected</div>
-        </section>
-      </aside>
-
-      <main class="main-panel">
-        <section class="card full">
-          <h2>Task Ledger</h2>
-          <table id="taskTable">
-            <thead>
-              <tr><th>ID</th><th>File</th><th>Holder</th><th>Status</th></tr>
-            </thead>
-            <tbody id="taskBody"></tbody>
-          </table>
-        </section>
-
-        <section class="card full">
-          <h2>Findings Feed</h2>
-          <div id="findingsList" class="findings-list"></div>
-        </section>
-
-        <section class="card full">
-          <h2>Preview</h2>
-          <div id="previewPanel" class="preview-panel">
-            <div class="preview-header">
-              <span id="previewTitle">Preview</span>
-              <div class="preview-controls">
-                <button id="previewOpenBtn" class="btn-small">Open</button>
-                <button id="previewCloseBtn" class="btn-small btn-danger" disabled>Close</button>
+          <!-- Overview -->
+          <section class="view on" id="v-overview">
+            <div class="banner">
+              <span id="runIdChip" class="runid">IDLE</span>
+              <span class="t" id="runTitle">Awaiting a brief — nothing is running</span>
+              <span style="flex:1"></span>
+              <span class="chip mut" id="elapsedChip">00:00:00</span>
+            </div>
+            <div class="statgrid">
+              <div class="stat"><div class="lbl">phase</div><div class="big" id="statPhase">idle</div><div class="cap" id="statPhaseCap">the crew is at rest</div></div>
+              <div class="stat"><div class="lbl">token spend</div><div class="big" id="statTokens">0</div><div class="bar"><i id="tokenBar" style="width:0%"></i></div><div class="cap">zeak caps every department · local-first routing on</div></div>
+              <div class="stat"><div class="lbl">tasks</div><div class="big" id="statTasks">0</div><div class="cap" id="statTasksCap">task ledger rebuilt from the event stream</div></div>
+              <div class="stat"><div class="lbl">findings</div><div class="big" id="statFindings">0</div><div class="cap">security department scans every diff</div></div>
+            </div>
+            <div class="duo">
+              <div class="panel">
+                <div class="phead"><span>⌰ task ledger</span><span class="chip mut">live</span></div>
+                <div class="pbody scrollx">
+                  <table class="tbl">
+                    <thead><tr><th>ID</th><th>File</th><th>Holder</th><th>Status</th></tr></thead>
+                    <tbody id="taskBody"></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="phead"><span>⋮⋮ routing &amp; economics</span><span class="chip mut">laya · zeak</span></div>
+                <div class="pbody">
+                  <div class="feed" id="overviewRouting"></div>
+                  <div class="feedempty" id="overviewRoutingEmpty">no routing decisions yet — run a brief</div>
+                </div>
               </div>
             </div>
-            <div class="preview-file-list">
-              <h3>Files</h3>
-              <div id="previewFileList"></div>
+          </section>
+
+          <!-- Command -->
+          <section class="view" id="v-command">
+            <div class="vhead"><div><h1>Command</h1><p>One brief in — the crew plans, builds, audits and merges</p></div></div>
+            <div class="duo">
+              <div class="panel">
+                <div class="phead"><span>✎ brief &amp; goal</span></div>
+                <div class="pbody">
+                  <div class="fieldlbl">brief</div>
+                  <textarea id="briefInput" placeholder="Enter your brief..." spellcheck="false"></textarea>
+                  <div class="fieldlbl">goal state (comma-separated criteria)</div>
+                  <textarea id="goalInput" placeholder="Goal state (comma-separated criteria)..." spellcheck="false"></textarea>
+                  <div class="btnrow">
+                    <button id="runBtn" class="btn sea">▶ Run Deck</button>
+                    <button id="abortBtn" class="btn danger" disabled>■ Abort</button>
+                  </div>
+                  <div class="cap" style="margin-top:10px">Laya routes trivial briefs to the free local executor; heavy ones decompose through Dept 4. Zeak caps every paid call.</div>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="phead"><span>⌁ default crew</span><span class="chip mint"><i class="dot mint"></i>local-first</span></div>
+                <div class="pbody">
+                  <div id="crewRoster" class="crew-roster"></div>
+                  <div class="cap" style="margin-top:10px">engineer + security scan on qwen2.5-coder (Ollama, free) · lead stays frontier behind Zeak</div>
+                </div>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+
+          <!-- Findings -->
+          <section class="view" id="v-findings">
+            <div class="vhead"><div><h1>Findings</h1><p>Security-audit output — every raise and resolution, with the flagged line</p></div><span class="chip mut">dept 5 · free scanning</span></div>
+            <div class="panel" style="margin-bottom:12px">
+              <div class="phead"><span>⚡ routing &amp; economics feed</span></div>
+              <div class="pbody"><div class="feed" id="routingFeedHolder"></div></div>
+            </div>
+            <div class="panel">
+              <div class="phead"><span>🛡 findings feed</span></div>
+              <div class="pbody"><div id="findingsList" class="findings-list"></div></div>
+            </div>
+          </section>
+
+          <!-- Crew -->
+          <section class="view" id="v-crew">
+            <div class="vhead"><div><h1>Crew</h1><p>Swappable stateless workers — health probed from main, keys never cross the bridge</p></div></div>
+            <div id="crewRosterBig" class="crewgrid"></div>
+            <p class="fnote">any slot can be re-tenanted by config alone · only requirement: read &amp; write the State Contract</p>
+          </section>
+
+          <!-- Preview -->
+          <section class="view" id="v-preview">
+            <div class="vhead"><div><h1>Preview</h1><p>Sandboxed view of the merged output — file:// inside the run's outputDir only</p></div></div>
+            <div class="pvgrid">
+              <div class="panel">
+                <div class="phead"><span>files · MANIFEST.json</span></div>
+                <div class="pbody"><div id="previewFileList" class="tree"></div></div>
+              </div>
+              <div class="panel">
+                <div class="phead"><span id="previewTitle">Preview</span>
+                  <span style="display:flex;gap:6px">
+                    <button id="previewOpenBtn" class="btn">Open</button>
+                    <button id="previewCloseBtn" class="btn danger" disabled>Close</button>
+                  </span>
+                </div>
+                <div class="pbody">
+                  <div id="previewPanel" class="rendered-empty">
+                    <div class="sigcard">
+                      <div class="logo"></div>
+                      <h3>Sandboxed Preview</h3>
+                      <p>Generated output renders in a contained WebContentsView — network and out-of-dir file:// requests are cancelled at the session layer.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Event Stream -->
+          <section class="view" id="v-stream">
+            <div class="vhead"><div><h1>Event Stream</h1><p>Everything the engine emits — journaled, ordered, replayable</p></div><span class="chip mut">deck:events:batch + replay</span></div>
+            <div class="chat" id="streamChat"><div id="streamList"></div></div>
+          </section>
+
+        </div>
       </main>
     </div>
+
+    <!-- ── status bar ── -->
+    <footer class="statusbar">
+      <span class="ok" id="sbBridge">● bridge</span>
+      <span id="elapsedTimer" class="mono">00:00:00</span>
+      <span id="tokenSpend" class="sea">Tokens: 0</span>
+      <span class="grow"></span>
+      <span class="hide-s">common-s v2 · brain + laya + zeak + 5 depts</span>
+    </footer>
   </div>
 
-  <!--
-    Plain-script loading, no bundler: `prelude.js` provides the minimal
-    `module`/`exports` shim the compiled shared contract (CommonJS) needs;
-    `bind-bt.js` publishes its exports (sorting + empty-state helpers) as the
-    global `BT`; `app.js` is the renderer. All external same-origin files, so
-    the page's strict CSP (`script-src 'self'`) holds. The renderer never
-    imports engine code.
-  -->
   <script src="prelude.js"></script>
   <script src="../shared/bridge-types.js"></script>
   <script src="bind-bt.js"></script>
