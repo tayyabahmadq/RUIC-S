@@ -40,6 +40,10 @@ export type BridgeEventName =
   | 'zeak.fallback'
   | 'zeak.early_stop'
   | 'zeak.escalation'
+  | 'zeak.predictive_stop'
+  | 'learning.pattern_found'
+  | 'learning.guide_added'
+  | 'learning.guide_rejected'
   | 'collector.collected'
 
 export interface BridgeEventPayloads {
@@ -71,6 +75,10 @@ export interface BridgeEventPayloads {
   'zeak.fallback': { runId: string; taskId: string | null; from: string; to: string; reason: string }
   'zeak.early_stop': { runId: string; taskId: string | null; chunks: number }
   'zeak.escalation': { runId: string; taskId: string | null; to: string; attempt: number }
+  'zeak.predictive_stop': { runId: string; taskId: string | null; signature: string; guide: string }
+  'learning.pattern_found': { runId: string; candidates: number; deterministic: boolean }
+  'learning.guide_added': { runId: string; signature: string; guide: string; occurrences: number }
+  'learning.guide_rejected': { runId: string; signature: string; reason: string }
   'collector.collected': { runId: string; topic: string; count: number; via: string }
   'codegraph.rebuilt': { files: number; clusters: number; hubs: number }
   'preview.state': { runId: string; open: boolean; currentFile: string | null; files: string[] }
@@ -425,6 +433,18 @@ function applyEvent(state: MutableState, event: DeckEvent): void {
     case 'zeak.escalation':
       state.routingNotes.push(`Zeak re-escalated task to ${event.payload.to} (attempt ${event.payload.attempt})`)
       return
+      case 'zeak.predictive_stop':
+        state.routingNotes.push(`Zeak predictive stop (${event.payload['signature']}): ${event.payload['guide']}`)
+        break
+      case 'learning.pattern_found':
+        state.routingNotes.push(`Learning scan found ${event.payload['candidates']} pattern(s)${event.payload['deterministic'] ? ' (deterministic)' : ''}`)
+        break
+      case 'learning.guide_added':
+        state.routingNotes.push(`Guide added (${event.payload['occurrences']}x seen): ${event.payload['guide']}`)
+        break
+      case 'learning.guide_rejected':
+        state.routingNotes.push(`Guide rejected for ${event.payload['signature']}: ${event.payload['reason']}`)
+        break
     case 'collector.collected':
       state.routingNotes.push(`Collected ${event.payload.count} item(s) via ${event.payload.via}: ${event.payload.topic}`)
       return

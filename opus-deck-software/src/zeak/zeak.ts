@@ -40,6 +40,13 @@ export interface ZeakOptions {
   cacheThreshold?: number
   /** When set, early-stop evaluates this predicate on each chunk boundary. */
   earlyStop?: (chunksSoFar: TransportChunk[]) => boolean
+  /**
+   * Zeak v2 predictive stop: evaluated (throttled) once a taskId is known.
+   * Returns {signature, guide} when the accumulating output is heading
+   * toward a method the TRY BOX says already failed — the fused v1+v2
+   * trigger: stop on success OR on a known failure, whichever comes first.
+   */
+  predictive?: (partial: string, taskId: string | null) => Promise<{ signature: string; guide: string } | null>
 }
 
 interface SpendState {
@@ -122,10 +129,12 @@ export function zeakWrap(
       const dept = departmentFor(pruned)
       const chunks: TransportChunk[] = []
       let stopped = false
+      let accumulated = ''
       for await (const chunk of paid.complete(pruned)) {
         chunks.push(chunk)
         if (chunk.type === UNIT_CHUNK && typeof chunk.text === 'string') {
           spend.departments[dept] = (spend.departments[dept] ?? 0) + estimateTokens(chunk.text)
+          accumulated += chunk.text
         }
         if (
           !stopped && options.earlyStop !== undefined && chunks.length > 0 &&
@@ -134,6 +143,26 @@ export function zeakWrap(
           stopped = true
           options.events.emit('zeak.early_stop', { taskId, department: dept, chunks: chunks.length })
           break
+        }
+        // Zeak v2 predictive stop (throttled): heading toward a known-failed
+        // method? Abort and surface the verified guide instead.
+        if (
+          !stopped && options.predictive !== undefined && taskId !== null &&
+          chunks.length % 8 === 0 && accumulated.length > 0
+        ) {
+          try {
+            const hit = await options.predictive(accumulated, taskId)
+            if (hit !== null) {
+              stopped = true
+              options.events.emit('zeak.predictive_stop', { taskId, signature: hit.signature, guide: hit.guide })
+              yield { type: 'text', text: `
+[zeak] stopped: this approach already failed (${hit.signature}). Verified guide: ${hit.guide}` }
+              yield { type: 'done', finishReason: 'predictive_stop' }
+              return
+            }
+          } catch {
+            // predictive lookup must never break the stream
+          }
         }
       }
       for (const chunk of chunks) yield chunk

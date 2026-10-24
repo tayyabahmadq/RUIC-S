@@ -190,6 +190,17 @@ export function f07GetDefaultContractWriter(): CrewDependencies['contractWriter'
   return defaultContractWriter
 }
 
+/* Zeak v2: crew default failure recorder (TRY BOX) + guides provider seams.
+ * Same module-default pattern: wiring installs once at wire time. */
+let defaultFailureRecorder: NonNullable<CrewDependencies['failureRecorder']>
+export function f07SetDefaultFailureRecorder(recorder: NonNullable<CrewDependencies['failureRecorder']>): void {
+  defaultFailureRecorder = recorder
+}
+let defaultGuidesProvider: NonNullable<CrewDependencies['guides']>
+export function f07SetDefaultGuides(provider: NonNullable<CrewDependencies['guides']>): void {
+  defaultGuidesProvider = provider
+}
+
 async function readCommonsText(commons: { read?: unknown }, path: string): Promise<string> {
   const readFn = asCallable((commons as Record<string, unknown>)['read'])
   if (!readFn) return ''
@@ -281,6 +292,12 @@ export class EngineerWorker {
           taskId: task.id, status: 'blocked', owner: this.modelId,
           remaining: [`task ${task.id} failed before completion: ${detail}`],
         })
+        // Zeak v2: a crash/bail IS a TRY BOX event — the failure memory.
+        await this.recordFailureSafe({
+          taskId: task.id, modelId: this.modelId,
+          method: task.description ?? task.id,
+          errorDetail: detail,
+        })
         this.consecutiveFailures += 1
         this.failedTaskIds.push(task.id)
         try { (task as MutableTask).status = 'failed' } catch { }
@@ -334,8 +351,15 @@ export class EngineerWorker {
       const workingSet = (this.deps.workingSet?.currentEntries?.(this.modelId) ??
         currentWorkingSetEntries(this.modelId)) as WorkingSetEntry[]
 
+      // Zeak v2: the "clean" arrow — verified guides for this task flow
+      // back into the working model's context each round.
+      let guides: string | undefined
+      try {
+        const provider = this.deps.guides ?? defaultGuidesProvider
+        if (provider !== undefined) guides = await provider()
+      } catch { guides = undefined }
       const prompt = buildPrompt({
-        task, brief, digest, presence, workingSet, bus,
+        task, brief, digest, presence, workingSet, ...(guides !== undefined ? { guides } : {}), bus,
       })
 
       // Phase 3 (personas): engineer persona body as the system prompt.
@@ -381,6 +405,22 @@ export class EngineerWorker {
       })
     } finally {
       await releaseLocks(locks, this.modelId, claimTargets)
+    }
+  }
+
+  /** Zeak v2: TRY BOX recorder — best-effort, never throws into the run loop. */
+  private async recordFailureSafe(input: {
+    taskId: string
+    modelId: string
+    method: string
+    errorDetail: string
+  }): Promise<void> {
+    const recorder = this.deps.failureRecorder ?? defaultFailureRecorder
+    if (recorder === undefined) return
+    try {
+      await recorder(input)
+    } catch {
+      // failure recording must never crash the worker
     }
   }
 

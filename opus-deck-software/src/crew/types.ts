@@ -170,6 +170,24 @@ export interface CrewDependencies {
     decisions?: readonly string[]
     artifacts?: readonly string[]
   }) => Promise<void>
+  /**
+   * Zeak v2: the TRY BOX recorder. Every failed attempt lands here at the
+   * exit path (a crash/bail IS a TRY BOX event). Returns the deterministic
+   * error signature {E}. Absent = shipped behavior (no failure recording).
+   */
+  readonly failureRecorder?: (input: {
+    taskId: string
+    modelId: string
+    method: string
+    errorDetail: string
+  }) => Promise<string | void>
+  /**
+   * Zeak v2: verified guide lines for THIS task (the "clean" arrow —
+   * correlated failure knowledge flowing back to the working model).
+   * Returns '' when nothing applies. Guide tokens are PROTECTED: the prompt
+   * builder never trims them.
+   */
+  readonly guides?: () => Promise<string>
 }
 
 export interface CrewWorkerResult {
@@ -198,6 +216,9 @@ export interface BuildPromptArgs {
   readonly digest: string
   readonly presence: readonly PresenceEntry[]
   readonly workingSet: readonly WorkingSetEntry[]
+  /** Zeak v2: verified guide lines (the "clean" arrow). PROTECTED tokens —
+   * never trimmed by the budget overflow path. */
+  readonly guides?: string
   /** Shared event bus (injected by wiring). Emits compaction.requested when over budget. */
   readonly bus?: EventBus
 }

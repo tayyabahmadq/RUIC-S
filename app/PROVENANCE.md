@@ -322,3 +322,17 @@ Verification: engine suite 162/162 (7 new Agent-Reach tests), gate re-run before
 - Ollama 0.40.11 installed; `qwen2.5-coder:1.5b` (986 MB) + `nomic-embed-text` (274 MB) pulled.
 - Empirical context ladder verdict: **32768, 100% GPU (2.1 GB)**. 65536 is IMPOSSIBLE on this model — the qwen2 architecture caps context_length at 32768 and Ollama silently clamps; the ladder's honest winner is 32K (recorded in COMMONS/STATE/context.txt).
 - The Brain embedder is wired in the deck's main process (local nomic-embed-text via Ollama; null on failure degrades vector ops to miss-only).
+
+### Zeak v2 — the Teacher (2026-10-25)
+
+Re-freeze aggregate `$AGG`.
+
+- **TRY BOX** (`src/state/trybox.ts`, `STATE/trybox.json`): every failed attempt recorded at the worker exit path (same sites as blocked/handed_off contracts) with a deterministic error signature (`errorSignature`: anchored keywords + normalized hash — no LLM in the hot path). Cap 500.
+- **Learning loop** (`src/zeak/learning.ts`): triggered after every compaction cycle (`compaction.done`), serialized. Model 2 clusters TRY BOX signatures (local Qwen; deterministic fallback when Ollama is down). Model 3 verifies recurrence + causality — a pattern becomes a guide ONLY at >= 3 independent occurrences AND Model 3 confirmation (Pin 1). Guides land in `STATE/guides.md`, backed up to `ARCHIVE/guides@vN.md` on every change, embedded into the vector store (cache-gate fix-memory).
+- **Guide injection** (the "clean" arrow): `buildPrompt` gains a protected `## 6. Verified Guides` slot in BOTH budget branches (Pin 3 — never trimmed); workers fetch guides via a `deps.guides` seam, capped at a guide token budget (500 tokens).
+- **Guide decay** (Pin 2): the learning cycle caps guides (40) and drops the oldest.
+- **Predictive Early-Stop**: `zeakWrap` accepts a `predictive` predicate; wiring supplies a TRY BOX lookup — generation heading toward a known-failed method aborts and surfaces the verified guide (`zeak.predictive_stop`).
+- **Brand**: UI is now just **RUIC** (no RUics Deck anywhere).
+- Deck events: `learning.pattern_found`, `learning.guide_added`, `learning.guide_rejected`, `zeak.predictive_stop` in the routing feed.
+
+Verification: engine suite 171/171 (9 new Zeak v2 tests), app 10/10, gate PASS before push.

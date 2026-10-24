@@ -52,10 +52,12 @@ import type { EmbedFn } from '../state/index.js'
 import { route as layaRoute } from '../routing/laya.js'
 import type { LayaDecision, LayaInput } from '../routing/laya.js'
 import { zeakWrap } from '../zeak/zeak.js'
+import { runLearningCycle } from '../zeak/learning.js'
+import { ollamaChatComplete } from '../state/ollama.js'
 import { collectTopic, GitHubCollector, BrowserCollector, createSerialQueue } from '../depts/data-collection.js'
 import { AgentReachCollector } from '../depts/agent-reach.js'
 import type { Collector } from '../depts/data-collection.js'
-import { f07SetDefaultContractWriter } from '../crew/index.js'
+import { f07SetDefaultContractWriter, f07SetDefaultFailureRecorder, f07SetDefaultGuides } from '../crew/index.js'
 import * as nodePath from 'node:path'
 
 /**
@@ -119,6 +121,14 @@ export interface WireOptions {
     cacheThreshold?: number
     /** Hard vector cap (RAM budget). Default 2000. */
     vectorCap?: number
+    /** Zeak v2 learning-loop knobs. */
+    learning?: {
+      enabled?: boolean
+      minOccurrences?: number
+      guideCap?: number
+      guideTokenBudget?: number
+      staleDays?: number
+    }
   }
 }
 
@@ -263,6 +273,52 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
   hub.subscribe('task.failed', () => {
     void brain.requestCompaction(triggerDigestCompaction).catch(() => undefined)
   })
+
+  // --- Zeak v2: the learning loop (the Teacher) ---------------------------
+  // Model 2 (find pattern) + Model 3 (verify) run on the FREE local Qwen,
+  // triggered after every compaction cycle. Serialized through its own
+  // chain; Ollama-down degrades to deterministic clustering. Guides live in
+  // STATE/guides.md (backed up on every change) and are PROTECTED tokens.
+  const learning = cs.learning ?? {}
+  const learningEnabled = learning.enabled !== false
+  const learningOptions = {
+    ...(learning.minOccurrences !== undefined ? { minOccurrences: learning.minOccurrences } : {}),
+    ...(learning.guideCap !== undefined ? { guideCap: learning.guideCap } : {}),
+    ...(learning.staleDays !== undefined ? { staleDays: learning.staleDays } : {}),
+    chat: (prompt: string, system: string): Promise<string | null> =>
+      ollamaChatComplete('qwen2.5-coder:1.5b', [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ], { numCtx: 32768 }),
+    emit: (event: string, payload: unknown) => void hub.emit(event, payload),
+  }
+  let learningQueue: Promise<void> = Promise.resolve()
+  if (learningEnabled) {
+    hub.subscribe('compaction.done', () => {
+      learningQueue = learningQueue
+        .then(async () => { await runLearningCycle(brain, learningOptions) })
+        .catch(() => undefined)
+    })
+    // Exit-path TRY BOX recording + guide provider (the "clean" arrow).
+    f07SetDefaultFailureRecorder(async (input: { taskId: string; modelId: string; method: string; errorDetail: string }) => {
+      return brain.recordFailure(input)
+    })
+    f07SetDefaultGuides(async () => {
+      // Cap: guide tokens are protected, but bounded — the sketch's "prompts
+      // stay small" rule. Default 500 tokens (~2000 chars) of guide lines.
+      const budgetChars = (learning.guideTokenBudget ?? 500) * 4
+      const raw = await brain.readGuides()
+      const lines = raw.split(String.fromCharCode(10)).filter((l) => l.startsWith('- '))
+      const out: string[] = []
+      let used = 0
+      for (const line of lines.reverse()) {
+        if (used + line.length > budgetChars) break
+        out.unshift(line)
+        used += line.length
+      }
+      return out.join(String.fromCharCode(10))
+    })
+  }
 
   // --- Common-S v2: Zeak (Tier 4 economic layer) wraps the ONE transport
   // seam every phase shares. Over-cap falls back to the free local model,

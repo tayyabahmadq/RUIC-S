@@ -149,6 +149,18 @@ function reconstructState(events: readonly DeckEvent[]): ReconstructedState {
       case 'zeak.escalation':
         routingNotes.push(`Zeak re-escalated task to ${event.payload.to} (attempt ${event.payload.attempt})`)
         break
+      case 'zeak.predictive_stop':
+        routingNotes.push(`Zeak predictive stop (${event.payload['signature']}): ${event.payload['guide']}`)
+        break
+      case 'learning.pattern_found':
+        routingNotes.push(`Learning scan found ${event.payload['candidates']} pattern(s)${event.payload['deterministic'] ? ' (deterministic)' : ''}`)
+        break
+      case 'learning.guide_added':
+        routingNotes.push(`Guide added (${event.payload['occurrences']}x seen): ${event.payload['guide']}`)
+        break
+      case 'learning.guide_rejected':
+        routingNotes.push(`Guide rejected for ${event.payload['signature']}: ${event.payload['reason']}`)
+        break
       case 'collector.collected':
         routingNotes.push(`Collected ${event.payload.count} item(s) via ${event.payload.via}: ${event.payload.topic}`)
         break
@@ -492,7 +504,7 @@ function renderRoutingNotes(holderId: string, emptyId: string | null): void {
     row.className = 'feedrow'
     const tag = document.createElement('span')
     tag.className = 'tg'
-    tag.textContent = note.startsWith('Laya') ? 'laya' : note.startsWith('Zeak') ? 'zeak' : 'collector'
+    tag.textContent = note.startsWith('Laya') ? 'laya' : note.startsWith('Zeak') ? 'zeak' : note.startsWith('Learning') ? 'learn' : 'collector'
     const txt = document.createElement('span')
     txt.textContent = note
     row.appendChild(tag)

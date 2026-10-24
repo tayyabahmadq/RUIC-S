@@ -14,6 +14,7 @@ import * as nodePath from 'node:path'
 import { ContractStore, makeContract, validateContract } from './contract.js'
 import type { StateContract, TaskStatus } from './contract.js'
 import { VectorStore } from './vector-store.js'
+import { TryBox } from './trybox.js'
 import type { EmbedFn, VectorSearchHit } from './vector-store.js'
 import { atomicWriteJson, readJson } from './atomic.js'
 
@@ -40,6 +41,7 @@ export interface BrainOptions {
 export class Brain {
   readonly contracts: ContractStore
   readonly vectors: VectorStore
+  readonly trybox: TryBox
   private readonly stateDir: string
   private readonly stateFile: string
   private readonly vectorMinAgeDays: number
@@ -51,6 +53,7 @@ export class Brain {
     this.stateFile = nodePath.join(this.stateDir, 'state.json')
     this.contracts = new ContractStore(this.stateDir)
     this.vectors = new VectorStore(this.stateDir, { cap: options.vectorCap })
+    this.trybox = new TryBox(this.stateDir)
     this.vectorMinAgeDays = options.vectorMinAgeDays ?? 3
     this.vectorDecayCutoff = options.vectorDecayCutoff ?? 0.5
     if (embed !== null) this.embed = embed
@@ -164,5 +167,63 @@ export class Brain {
   async init(): Promise<void> {
     await fsp.mkdir(this.stateDir, { recursive: true })
     await this.vectors.load()
+    await this.trybox.init()
+  }
+
+  // --- Zeak v2: the learning loop ------------------------------------------
+
+  /** Replace the whole guides file (decay pass). tmp+rename atomic. */
+  async replaceGuides(content: string): Promise<void> {
+    const guidesPath = nodePath.join(this.stateDir, 'guides.md')
+    const tmp = guidesPath + '.tmp'
+    await fsp.writeFile(tmp, content, 'utf8')
+    await fsp.rename(tmp, guidesPath)
+  }
+
+
+  /** Record one failed attempt into the TRY BOX (exit-path obligation).
+   * Returns the deterministic error signature {E}. */
+  async recordFailure(input: {
+    taskId: string
+    modelId: string
+    method: string
+    errorDetail: string
+  }): Promise<string> {
+    return this.trybox.record(input)
+  }
+
+  /** Read the current verified guides. */
+  async readGuides(): Promise<string> {
+    try {
+      return await fsp.readFile(nodePath.join(this.stateDir, 'guides.md'), 'utf8')
+    } catch {
+      return ''
+    }
+  }
+
+  /** Append a verified guide line to STATE/guides.md with a backup (the
+   * sketch's "agent.md is backed up"), and embed it into the vector store
+   * (fix-memory for the cache-gate). Serialized by the learning queue. */
+  async addGuide(line: string): Promise<string | null> {
+    const guidesPath = nodePath.join(this.stateDir, 'guides.md')
+    let current = ''
+    try { current = await fsp.readFile(guidesPath, 'utf8') } catch { current = '# GUIDES' + String.fromCharCode(10) + String.fromCharCode(10) }
+    let version = 1
+    try {
+      const archiveDir = nodePath.join(this.stateDir, '..', 'ARCHIVE')
+      await fsp.mkdir(archiveDir, { recursive: true })
+      const files = await fsp.readdir(archiveDir)
+      for (const f of files) {
+        const m = /guides@v(\d+)\.md$/.exec(f)
+        if (m) version = Math.max(version, Number(m[1]) + 1)
+      }
+      await fsp.writeFile(nodePath.join(archiveDir, `guides@v${version}.md`), current, 'utf8')
+    } catch { /* archive unavailable — guide still written */ }
+    const NL = String.fromCharCode(10)
+    const updated = current.trimEnd() + NL + '- ' + line.trim() + NL
+    const tmp = guidesPath + '.tmp'
+    await fsp.writeFile(tmp, updated, 'utf8')
+    await fsp.rename(tmp, guidesPath)
+    return this.learn(`verified guide: ${line}`, 'guide')
   }
 }

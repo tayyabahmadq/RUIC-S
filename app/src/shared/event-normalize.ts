@@ -278,6 +278,35 @@ export function normalizeHubEvent(type: string, payload: unknown, ctx: Normalize
       return make('zeak.escalation', { runId: asString(p['runId']) ?? ctx.runId, taskId, to, attempt }, ctx)
     }
 
+    case 'zeak.predictive_stop': {
+      const signature = asString(p['signature'])
+      const guide = asString(p['guide'])
+      if (signature === undefined || guide === undefined) return null
+      const taskId = asString(p['taskId']) ?? null
+      return make('zeak.predictive_stop', { runId: asString(p['runId']) ?? ctx.runId, taskId, signature, guide }, ctx)
+    }
+
+    case 'learning.pattern_found': {
+      const candidates = asNumber(p['candidates'])
+      if (candidates === undefined) return null
+      return make('learning.pattern_found', { runId: asString(p['runId']) ?? ctx.runId, candidates, deterministic: p['deterministic'] === true }, ctx)
+    }
+
+    case 'learning.guide_added': {
+      const signature = asString(p['signature'])
+      const guide = asString(p['guide'])
+      const occurrences = asNumber(p['occurrences'])
+      if (signature === undefined || guide === undefined || occurrences === undefined) return null
+      return make('learning.guide_added', { runId: asString(p['runId']) ?? ctx.runId, signature, guide, occurrences }, ctx)
+    }
+
+    case 'learning.guide_rejected': {
+      const signature = asString(p['signature'])
+      const reason = asString(p['reason'])
+      if (signature === undefined || reason === undefined) return null
+      return make('learning.guide_rejected', { runId: asString(p['runId']) ?? ctx.runId, signature, reason }, ctx)
+    }
+
     case 'collector.collected': {
       const topic = asString(p['topic'])
       const count = asNumber(p['count'])

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0.0",
+  "contracts": [
+    {
+      "schemaVersion": "1.0.0",
+      "taskId": "T-01",
+      "parentTaskId": null,
+      "status": "blocked",
+      "owner": "eng-1",
+      "done": "",
+      "decisions": [],
+      "remaining": [
+        "task T-01 failed before completion: req.diff.atLine must be an integer >= 1"
+      ],
+      "artifacts": [],
+      "updatedAt": "2026-10-24T21:17:28.838Z"
+    }
+  ]
+}

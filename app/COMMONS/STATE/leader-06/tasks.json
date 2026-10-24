@@ -1,0 +1,10 @@
+[
+  {
+    "id": "T-01",
+    "path": "WORKSPACE/output.md",
+    "description": "build a trivial app",
+    "acceptance": [
+      "app builds"
+    ]
+  }
+]
