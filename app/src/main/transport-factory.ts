@@ -133,22 +133,89 @@ export function buildEngineTransport(config: DeckConfigInput, engine: LoadedEngi
   }
 
   const leadId = config.crew.lead.id
+
+  /**
+   * FreeLLM failover loop: every FREE model in the crew (local Ollama
+   * endpoints) forms a retry pool. If the chosen model errors, refuses to
+   * answer (empty stream), or dies mid-stream, the request routes to the
+   * next free model — looping through the pool until SOMETHING answers, so
+   * a single broken model never stalls the goal.
+   */
+  const freePoolIds = [...refs.values()].filter((r) => /(?:localhost|127\.0\.0\.1):11434/.test(r.endpoint ?? '')).map((r) => r.id)
+
+  function withFailover(primary: EngineTransport, primaryId: string): EngineTransport {
+    return {
+      complete(req) {
+        const self = this
+        const chain: string[] = [primaryId, ...freePoolIds.filter((id) => id !== primaryId)]
+        let lastError: unknown = null
+        async function* attempt(): AsyncGenerator<EngineTransportChunk, void, undefined> {
+          for (let i = 0; i < chain.length; i++) {
+            const candidateId = chain[i]
+            const ref = refs.get(candidateId)!
+            let transport: EngineTransport
+            try {
+              let t = built.get(candidateId)
+              if (t === undefined) {
+                t = buildOrMissing(ref)
+                built.set(candidateId, t)
+              }
+              transport = t
+            } catch (err) {
+              lastError = err
+              continue
+            }
+            const chunks: EngineTransportChunk[] = []
+            try {
+              for await (const chunk of transport.complete(req)) {
+                chunks.push(chunk)
+              }
+            } catch (err) {
+              lastError = err
+              continue // this model didn't answer — next free model
+            }
+            const text = chunks.filter((c) => c.type === 'text').map((c) => (c as { text: string }).text).join('')
+            if (chunks.length === 0 || text.trim().length === 0) {
+              lastError = new Error(`model "${candidateId}" returned no answer`)
+              continue // silent model — next free model
+            }
+            yield* chunks
+            return
+          }
+          // The whole free pool failed — surface a precise combined error.
+          const detail = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown')
+          throw new Error(`FreeLLM pool exhausted (tried ${chain.join(', ')}): ${detail}`)
+        }
+        void self
+        return attempt()
+      },
+    }
+  }
+
   const transport: EngineTransport = {
     complete(req) {
       const ref = refs.get(req.modelId)
+      const resolve = (id: string): EngineTransport => {
+        let t = built.get(id)
+        if (t === undefined) {
+          t = buildOrMissing(refs.get(id)!)
+          built.set(id, t)
+        }
+        return t
+      }
       if (ref === undefined) {
         // Engine-internal ids (compactor-small etc.) ride the lead's ref.
-        let leadT = built.get(leadId)
-        if (leadT === undefined) {
-          leadT = buildOrMissing(refs.get(leadId)!)
-          built.set(leadId, leadT)
-        }
-        return leadT.complete(req)
+        return resolve(leadId).complete(req)
       }
       let chosen = built.get(req.modelId)
       if (chosen === undefined) {
         chosen = buildOrMissing(ref)
         built.set(req.modelId, chosen)
+      }
+      // Free models get the failover loop; paid models keep the loud-fallback
+      // behavior (Zeak already handles their degradation).
+      if (freePoolIds.includes(req.modelId)) {
+        return withFailover(chosen, req.modelId).complete(req)
       }
       return chosen.complete(req)
     },

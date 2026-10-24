@@ -235,3 +235,12 @@ textarea::placeholder{color:rgba(130,145,184,.5)}
 .statusbar .accent{color:var(--cyan)}
 .mono{font-family:var(--mono)}
 .fnote{margin-top:12px;font:10px var(--mono);color:var(--muted2)}
+
+/* ── model pool / assignment form ── */
+.formgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 14px}
+.formgrid label{display:flex;flex-direction:column;gap:5px;font:9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted2)}
+.formgrid input,.formgrid select{background:var(--bg2);border:1px solid var(--edge);border-radius:10px;padding:8px 11px;font:12px var(--mono);color:var(--fg);outline:none}
+.formgrid input:focus,.formgrid select:focus{border-color:var(--violet);box-shadow:var(--glow)}
+.formgrid .chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;color:var(--fg)}
+.assign-select{width:100%;margin-top:9px;background:var(--bg2);border:1px solid var(--edge);border-radius:10px;padding:8px 11px;font:11.5px var(--mono);color:var(--fg);outline:none}
+.assign-select:focus{border-color:var(--violet)}

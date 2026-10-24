@@ -622,6 +622,126 @@ function renderStream(): void {
  * Run / abort
  * ------------------------------------------------------------------ */
 
+/* ── Model pool: department-agnostic user-added models (localStorage) ── */
+interface PoolModel {
+  id: string
+  provider: 'openai-compatible' | 'anthropic'
+  endpoint: string
+  model: string
+  contextWindowTokens: number
+  paramCountB: number | null
+  free: boolean
+}
+type Assignments = Record<'lead' | 'eng' | 'sec1' | 'sec2', string | 'auto'>
+
+const POOL_KEY = 'ruic.modelPool'
+const ASSIGN_KEY = 'ruic.assignments'
+
+function loadPool(): PoolModel[] {
+  try {
+    const raw = window.localStorage.getItem(POOL_KEY)
+    const parsed = raw !== null ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+function savePool(models: PoolModel[]): void {
+  try { window.localStorage.setItem(POOL_KEY, JSON.stringify(models)) } catch { /* private mode */ }
+}
+function loadAssignments(): Assignments {
+  try {
+    const raw = window.localStorage.getItem(ASSIGN_KEY)
+    return raw !== null ? { lead: 'auto', eng: 'auto', sec1: 'auto', sec2: 'auto', ...JSON.parse(raw) } : { lead: 'auto', eng: 'auto', sec1: 'auto', sec2: 'auto' }
+  } catch { return { lead: 'auto', eng: 'auto', sec1: 'auto', sec2: 'auto' } }
+}
+function saveAssignments(a: Assignments): void {
+  try { window.localStorage.setItem(ASSIGN_KEY, JSON.stringify(a)) } catch { /* private mode */ }
+}
+
+function renderModelPool(): void {
+  const pool = byId<HTMLElement>('modelPool')
+  if (pool === null) return
+  clearChildren(pool)
+  const models = loadPool()
+  if (models.length === 0) {
+    pool.innerHTML = '<div class="crew-empty">pool is empty — add a model above (local Ollama models are free and join the failover loop)</div>'
+  }
+  for (const m of models) {
+    const card = document.createElement('div')
+    card.className = 'panel'
+    const head = document.createElement('div')
+    head.className = 'phead'
+    const name = document.createElement('span')
+    name.textContent = m.id
+    head.appendChild(name)
+    const rm = document.createElement('button')
+    rm.className = 'btn danger'
+    rm.style.height = '22px'
+    rm.style.padding = '0 9px'
+    rm.textContent = 'remove'
+    rm.addEventListener('click', () => {
+      savePool(loadPool().filter((x) => x.id !== m.id))
+      renderModelPool()
+      renderAssignments()
+    })
+    head.appendChild(rm)
+    card.appendChild(head)
+    const body = document.createElement('div')
+    body.className = 'pbody'
+    const meta = document.createElement('div')
+    meta.style.cssText = 'font:10.5px var(--mono);color:var(--muted);line-height:1.9'
+    const params = m.paramCountB !== null ? `${m.paramCountB}B params · ` : ''
+    meta.innerHTML = `${m.model}<br>${m.endpoint}<br>ctx ${m.contextWindowTokens.toLocaleString('en-US')} · ${params}${m.free ? '<span class="chip good" style="margin-left:4px">free</span>' : '<span class="chip warn" style="margin-left:4px">paid</span>'}`
+    body.appendChild(meta)
+    card.appendChild(body)
+    pool.appendChild(card)
+  }
+}
+
+const SEATS: Array<{ key: keyof Assignments; label: string }> = [
+  { key: 'lead', label: 'lead (planner)' },
+  { key: 'eng', label: 'engineer' },
+  { key: 'sec1', label: 'security 1' },
+  { key: 'sec2', label: 'security 2' },
+]
+
+function renderAssignments(): void {
+  const grid = byId<HTMLElement>('assignGrid')
+  if (grid === null) return
+  clearChildren(grid)
+  const models = loadPool()
+  const assignments = loadAssignments()
+  for (const seat of SEATS) {
+    const card = document.createElement('div')
+    card.className = 'stat'
+    const lbl = document.createElement('div')
+    lbl.className = 'lbl'
+    lbl.textContent = seat.label
+    card.appendChild(lbl)
+    const sel = document.createElement('select')
+    sel.className = 'assign-select'
+    sel.dataset.seat = seat.key
+    const auto = document.createElement('option')
+    auto.value = 'auto'
+    auto.textContent = 'AUTO — chosen by lead/Laya'
+    sel.appendChild(auto)
+    for (const m of models) {
+      const opt = document.createElement('option')
+      opt.value = m.id
+      opt.textContent = `${m.id} (${m.model})`
+      sel.appendChild(opt)
+    }
+    sel.value = assignments[seat.key]
+    if (sel.value !== assignments[seat.key]) sel.value = 'auto'
+    sel.addEventListener('change', () => {
+      const a = loadAssignments()
+      a[seat.key] = sel.value
+      saveAssignments(a)
+    })
+    card.appendChild(sel)
+    grid.appendChild(card)
+  }
+}
+
 function defaultCrew(): BridgeCrew {
   // Common-S v2 roster: the local executor (Qwen via Ollama, free) is the
   // default first engineer AND both security scanners (Dept 5 is free by
@@ -632,14 +752,36 @@ function defaultCrew(): BridgeCrew {
     model: 'qwen2.5-coder:1.5b',
     contextWindowTokens: 32768,
   }
+  // User assignments from the Model pool: an explicit pick takes the seat;
+  // AUTO keeps the shipped default (lead/Laya decides).
+  const pool = loadPool()
+  const assignments = loadAssignments()
+  const pick = (seat: keyof Assignments): BridgeModelRef | null => {
+    const want = assignments[seat]
+    if (want === 'auto') return null
+    const m = pool.find((x) => x.id === want)
+    if (m === undefined) return null
+    return {
+      id: m.id,
+      provider: m.provider,
+      endpoint: m.endpoint,
+      model: m.model,
+      contextWindowTokens: m.contextWindowTokens,
+      ...(m.free ? {} : {}),
+    }
+  }
+  const leadPick = pick('lead')
+  const engPick = pick('eng')
+  const sec1Pick = pick('sec1')
+  const sec2Pick = pick('sec2')
   return {
-    lead: { id: 'lead', provider: 'openai-compatible', model: 'gpt-5', contextWindowTokens: 128000, speedClass: 'heavy' },
+    lead: leadPick ?? { id: 'lead', provider: 'openai-compatible', model: 'gpt-5', contextWindowTokens: 128000, speedClass: 'heavy' },
     engineers: [
-      { id: 'eng-1', ...local, speedClass: 'standard' as const },
+      engPick ?? { id: 'eng-1', ...local, speedClass: 'standard' as const },
     ],
     security: [
-      { id: 'sec-1', ...local, speedClass: 'fast' as const },
-      { id: 'sec-2', ...local, speedClass: 'standard' as const },
+      sec1Pick ?? { id: 'sec-1', ...local, speedClass: 'fast' as const },
+      sec2Pick ?? { id: 'sec-2', ...local, speedClass: 'standard' as const },
     ],
   }
 }
@@ -770,6 +912,44 @@ async function boot(): Promise<void> {
 
 function mount(): void {
   initViews()
+  renderModelPool()
+  renderAssignments()
+  const addModelBtn = byId<HTMLButtonElement>('addModelBtn')
+  const addModelForm = byId<HTMLFormElement>('addModelForm')
+  if (addModelBtn !== null && addModelForm !== null) {
+    addModelBtn.addEventListener('click', () => {
+      addModelForm.style.display = addModelForm.style.display === 'none' ? '' : 'none'
+    })
+  }
+  const nmCancel = byId<HTMLButtonElement>('nmCancel')
+  if (nmCancel !== null && addModelForm !== null) {
+    nmCancel.addEventListener('click', () => { addModelForm.style.display = 'none' })
+  }
+  if (addModelForm !== null) {
+    addModelForm.addEventListener('submit', (e) => {
+      e.preventDefault()
+      const val = (id: string): string => byId<HTMLInputElement>(id)?.value.trim() ?? ''
+      const id = val('nmId')
+      const model = val('nmModel')
+      const endpoint = val('nmEndpoint')
+      if (id.length === 0 || model.length === 0 || endpoint.length === 0) return
+      const pool = loadPool().filter((m) => m.id !== id)
+      pool.push({
+        id,
+        provider: (byId<HTMLSelectElement>('nmProvider')?.value ?? 'openai-compatible') as PoolModel['provider'],
+        endpoint,
+        model,
+        contextWindowTokens: Number(val('nmCtx')) || 32768,
+        paramCountB: val('nmParams') !== '' ? Number(val('nmParams')) : null,
+        free: byId<HTMLInputElement>('nmFree')?.checked ?? false,
+      })
+      savePool(pool)
+      if (addModelForm !== null) addModelForm.style.display = 'none'
+      renderModelPool()
+      renderAssignments()
+    })
+  }
+  const runBtn = byId<HTMLButtonElement>('runBtn')
   const chatForm = byId<HTMLFormElement>('chatForm')
   if (chatForm !== null) {
     chatForm.addEventListener('submit', (e) => {
@@ -789,7 +969,6 @@ function mount(): void {
       if (text.length > 0 && !deckRunning) void handleRun(text)
     })
   }
-  const runBtn = byId<HTMLButtonElement>('runBtn')
   if (runBtn !== null) runBtn.addEventListener('click', () => { void handleRun() })
   const abortBtn = byId<HTMLButtonElement>('abortBtn')
   if (abortBtn !== null) abortBtn.addEventListener('click', () => { void handleAbort() })
