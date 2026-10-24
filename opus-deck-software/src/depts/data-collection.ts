@@ -17,6 +17,17 @@
  * this department, time and RAM are the resources the gate saves.
  */
 import type { Brain } from '../state/brain.js'
+/** The shared one-browsing-agent-at-a-time queue. Both the Obscura Browser
+ * and the Agent-Reach session browser serialize through the SAME instance,
+ * so one browsing agent at a time holds across implementations. */
+export function createSerialQueue() {
+  let tail: Promise<unknown> = Promise.resolve()
+  return function enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const run = tail.then(job, job)
+    tail = run.catch(() => undefined)
+    return run
+  }
+}
 
 export interface CollectedItem {
   title: string
@@ -111,26 +122,28 @@ export interface BrowserCollectorOptions {
   /** Launch the Obscura agent. Return null when it cannot launch. */
   launch: (topic: string) => Promise<CollectedItem[] | null>
   events: CollectEvents
+  /** Shared serialization queue (pass the SAME instance to every browsing
+   * collector so one browsing agent at a time holds across implementations). */
+  enqueue?: <T>(job: () => Promise<T>) => Promise<T>
 }
 
 export class BrowserCollector implements Collector {
   readonly name = 'obscura-browser'
   private readonly launch: (topic: string) => Promise<CollectedItem[] | null>
   private readonly events: CollectEvents
-  private queue: Promise<CollectedItem[]> = Promise.resolve([])
-  private busy = false
+  private readonly enqueue: <T>(job: () => Promise<T>) => Promise<T>
 
   constructor(options: BrowserCollectorOptions) {
     this.launch = options.launch
     this.events = options.events
+    this.enqueue = options.enqueue ?? createSerialQueue()
   }
 
-  /** Pinned rule: ONE browsing agent at a time. Calls serialize; a queued
-   * call waits for the in-flight one instead of opening a second agent. */
+  /** Pinned rule: ONE browsing agent at a time, via the shared queue (the
+   * same instance Agent-Reach uses). A queued call waits for the in-flight
+   * one instead of opening a second agent. */
   collect(topic: string): Promise<CollectedItem[]> {
-    const run = this.queue.then(async () => {
-      if (this.busy) return []
-      this.busy = true
+    return this.enqueue(async () => {
       try {
         this.events.emit('collector.browser_start', { topic })
         const items = await this.launch(topic)
@@ -146,13 +159,8 @@ export class BrowserCollector implements Collector {
           topic, reason: 'error', detail: err instanceof Error ? err.message : String(err),
         })
         return []
-      } finally {
-        this.busy = false
       }
     })
-    // Keep the queue alive regardless of individual failures.
-    this.queue = run.catch(() => [])
-    return run
   }
 }
 
@@ -162,7 +170,11 @@ export class BrowserCollector implements Collector {
 
 export interface DataCollectionOptions {
   brain: Brain
-  collector: Collector
+  /** Primary collector (back-compat). */
+  collector?: Collector
+  /** Ordered fallback chain: tried in order until one yields items. Free
+   * budget first (GitHub REST), then browser-time (Agent-Reach / Obscura). */
+  collectors?: readonly Collector[]
   events: CollectEvents
   /** Cache-gate similarity threshold. Conservative default 0.9. */
   cacheThreshold?: number
@@ -194,12 +206,20 @@ export async function collectTopic(topic: string, options: DataCollectionOptions
   }
   events.emit('collector.cache_miss', { topic })
 
-  // --- Collect through the seam --------------------------------------------
+  // --- Collect through the seam: ordered fallback chain ---------------------
+  const chain: readonly Collector[] = options.collectors ?? (options.collector !== undefined ? [options.collector] : [])
   let items: CollectedItem[] = []
-  try {
-    items = await collector.collect(topic)
-  } catch {
-    items = []
+  let usedVia = 'none'
+  for (const collector of chain) {
+    try {
+      items = await collector.collect(topic)
+    } catch {
+      items = []
+    }
+    if (items.length > 0) {
+      usedVia = collector.name
+      break
+    }
   }
 
   // --- Ingest into the Brain (embed + store) --------------------------------
@@ -210,6 +230,6 @@ export async function collectTopic(topic: string, options: DataCollectionOptions
       // Learn failures are non-fatal: the caller still gets the raw items.
     }
   }
-  events.emit('collector.collected', { topic, count: items.length, via: collector.name })
+  events.emit('collector.collected', { topic, count: items.length, via: usedVia })
   return { servedFromCache: false, items }
 }

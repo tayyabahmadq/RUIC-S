@@ -21,7 +21,7 @@ Ruic v2 implements the **Common-S Autonomous System**: a shared compacted Brain 
 | **Triangular Compaction Loop** | Fires after EVERY sub-task, serialized (never concurrent), atomic temp+rename writes on all three stores |
 | **Laya** | Deterministic code router: reads Brain state, scores complexity — trivial briefs run fully local (zero paid calls), heavy ones decompose through Dept 4. Open handoffs force orchestration |
 | **Dept 1 Engineering** | Laya + the local crew (intake/routing) |
-| **Dept 2 Data Collection** | Generic collector seam: GitHub-as-data-source (free REST, rate limit treated as a budget, back off on 403) and the Obscura Browser behind the same interface (one agent at a time, graceful degradation). Cache-gate first: repeat research is served from the Brain |
+| **Dept 2 Data Collection** | Ordered collector chain behind one seam: **GitHub-as-data-source** (free REST, rate limit treated as a budget, back off on 403) → **Agent-Reach** (local CLI: Bilibili, YouTube transcripts, V2EX, web search/read, Chinese + login-walled platforms; sessions copied from your own Chrome, read-only) → **Obscura Browser** slot. All browsing citizens share ONE serialization queue (one agent at a time); cache-gate serves repeat research from the Brain |
 | **Dept 3 Deep Thinking** | Frontier models (Sonnet/GPT-4o class), every call through Zeak, opt-in by complexity |
 | **Dept 4 Linking & Allocation** | Dependency-graph decomposition, assignments, handoff re-queue (a failing task changes hands whole — never sliced), stitching via `parentTaskId` |
 | **Dept 5 Security Check** | Diff-based scanning on the free local model; a Security rejection of a Zeak-downgraded task re-escalates it to the frontier exactly once |

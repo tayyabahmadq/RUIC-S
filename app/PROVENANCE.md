@@ -305,3 +305,14 @@ Sanctioned engine phase (re-freeze aggregate `58861E794B70EF5C01C1CE55C1BBFD1C12
 - **Fixed en route**: `STATE/tasks.json` initialized as an array at BOTH boot sites (the object shape broke merge/verify on any run that skipped leader.plan).
 
 Verification: engine suite 155/155, app suite 10/10, gate.mjs PASS (all 7 items incl. real-Electron contract + escape tests).
+
+### Agent-Reach collector (Dept 2 addition, 2026-10-25)
+
+Re-freeze aggregate `04BA4193E5F20C6CAB2C2951B150DA96AED079D5F20C1AB96930E2A6FEA187A1`.
+
+- `src/depts/agent-reach.ts`: `AgentReachCollector` — shells the local Agent-Reach CLI (github.com/Panniantong/Agent-Reach) behind the existing Collector seam. JSON + markdown output parsing, per-channel fallback, cached availability probe, graceful miss on missing CLI.
+- Browsing citizens (Obscura Browser + Agent-Reach session browser) share ONE serial queue (`createSerialQueue`, now owned by data-collection.ts) — one browsing agent at a time across implementations.
+- `collectTopic` takes an ordered `collectors` chain: free budget first (GitHub REST), browser time second; cache-gate still gates everything.
+- Channels default to the no-login free set (`websearch`, `github`); no paid-key channel (YouTube STT) is ever invoked by the engine.
+
+Verification: engine suite 162/162 (7 new Agent-Reach tests), gate re-run before push.

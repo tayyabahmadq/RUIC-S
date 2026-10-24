@@ -52,7 +52,8 @@ import type { EmbedFn } from '../state/index.js'
 import { route as layaRoute } from '../routing/laya.js'
 import type { LayaDecision, LayaInput } from '../routing/laya.js'
 import { zeakWrap } from '../zeak/zeak.js'
-import { collectTopic, GitHubCollector, BrowserCollector } from '../depts/data-collection.js'
+import { collectTopic, GitHubCollector, BrowserCollector, createSerialQueue } from '../depts/data-collection.js'
+import { AgentReachCollector } from '../depts/agent-reach.js'
 import type { Collector } from '../depts/data-collection.js'
 import { f07SetDefaultContractWriter } from '../crew/index.js'
 import * as nodePath from 'node:path'
@@ -518,16 +519,23 @@ export async function wireOpusDeck(runtime: OpusDeckRuntime, options: WireOption
     brain,
     laya: (input: LayaInput) => layaRoute(input, brain, 0),
     collect: (topic: string) => {
+      // Dept 2 fallback chain: FREE budget first (GitHub REST), then browser
+      // time (Agent-Reach: login-walled/video/Chinese platforms; Obscura
+      // Browser joins the same queue when the host wires a launch callback).
+      // Cache-gate already ran above: repeat research never reaches either.
+      const enqueue = createSerialQueue()
       const github = new GitHubCollector({
         ...(process.env.GITHUB_TOKEN !== undefined ? { token: process.env.GITHUB_TOKEN } : {}),
       })
-      // Obscura Browser sits behind the same collector seam: the host wires a
-      // launch callback when a browser agent is available; without one,
-      // collection degrades to GitHub only (no BrowserCollector is built).
-      const collector: Collector = github
+      const agentReach = new AgentReachCollector({
+        events: { emit: (event, payload) => void hub.emit(event, payload) },
+        enqueue,
+        channels: ['websearch', 'github'],
+      })
+      const collectors: readonly Collector[] = [github, agentReach]
       return collectTopic(topic, {
         brain,
-        collector,
+        collectors,
         events: { emit: (event, payload) => void hub.emit(event, payload) },
         ...(cs.cacheThreshold !== undefined ? { cacheThreshold: cs.cacheThreshold } : {}),
       })
