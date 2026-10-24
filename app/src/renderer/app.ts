@@ -288,7 +288,7 @@ function render(): void {
   const phaseStrip = byId<HTMLElement>('phaseStrip')
   if (phaseStrip !== null) {
     phaseStrip.textContent = `Phase: ${deckState.phase}`
-    phaseStrip.className = `chip sea`
+    phaseStrip.className = `chip accent`
   }
   renderOverviewStats()
 
@@ -447,6 +447,24 @@ function render(): void {
     findingsBadge.textContent = String(open)
     findingsBadge.style.display = open > 0 ? '' : 'none'
   }
+
+  // Chat chrome: live pill, phase chip, button states.
+  const chatPhase = byId<HTMLElement>('chatPhase')
+  if (chatPhase !== null) {
+    chatPhase.textContent = deckState.phase
+    chatPhase.className = `chip ${deckRunning ? 'accent pulse' : 'dim'}`
+  }
+  const chatPill = byId<HTMLElement>('chatPill')
+  if (chatPill !== null) chatPill.style.display = deckRunning ? '' : 'none'
+  const chatSend = byId<HTMLButtonElement>('chatSendBtn')
+  if (chatSend !== null) chatSend.disabled = deckRunning
+  const chatAbort = byId<HTMLButtonElement>('chatAbortBtn')
+  if (chatAbort !== null) {
+    chatAbort.disabled = !deckRunning
+    chatAbort.classList.toggle('hidden', !deckRunning)
+  }
+  const chatAbortHint = byId<HTMLElement>('chatAbortHint')
+  if (chatAbortHint !== null) chatAbortHint.style.display = deckRunning ? '' : 'none'
 }
 
 /* ── presentation helpers (view layer only — no bridge/logic changes) ── */
@@ -513,27 +531,88 @@ function renderRoutingNotes(holderId: string, emptyId: string | null): void {
   }
 }
 
+/** Chat rendering: the journal as a coding-chat transcript. Presentation
+ * only — the reducer and bridge are untouched. */
+function chatLineFor(event: DeckEvent): { who: string; text: string; kind: 'engine' | 'system' | 'alert' } {
+  const p = event.payload as Record<string, unknown>
+  switch (event.type) {
+    case 'run.started':
+      return { who: 'crew', text: `Run opened — brief: "${String(p['brief'])}" · goals: ${JSON.stringify(p['goalState'])}`, kind: 'system' }
+    case 'laya.routed':
+      return { who: 'laya', text: `Routed ${String(p['decision'])} (complexity ${String(p['score'])}) — ${String((p['reasons'] as string[] | undefined)?.[0] ?? '')}`, kind: 'system' }
+    case 'task.claimed':
+      return { who: 'crew', text: `${String(p['holder']) || 'engineer'} claimed ${String(p['taskId'])} → ${String(p['file'])}`, kind: 'engine' }
+    case 'task.completed':
+      return { who: 'crew', text: `${String(p['taskId'])} completed ✓`, kind: 'engine' }
+    case 'task.failed':
+      return { who: 'crew', text: `${String(p['taskId'])} failed ✗ — a TRY BOX entry was recorded`, kind: 'alert' }
+    case 'finding.raised':
+      return { who: 'security', text: `${String(p['severity'] ?? '').toUpperCase()} finding ${String(p['findingId'])}: ${String(p['message'])} (${String(p['path'])}:${String(p['line'])})`, kind: 'alert' }
+    case 'finding.resolved':
+      return { who: 'security', text: `Resolved ${String(p['findingId'])} ✓`, kind: 'engine' }
+    case 'zeak.fallback':
+      return { who: 'zeak', text: `Over cap — fell back ${String(p['from'])} → ${String(p['to'])} (${String(p['reason'])}). Re-escalation armed.`, kind: 'system' }
+    case 'zeak.predictive_stop':
+      return { who: 'zeak', text: `Stopped early — this approach already failed (${String(p['signature'])}). Guide: ${String(p['guide'])}`, kind: 'system' }
+    case 'zeak.early_stop':
+      return { who: 'zeak', text: `Early stop — checks passed and the contract is satisfied (${String(p['chunks'])} chunks)`, kind: 'system' }
+    case 'zeak.escalation':
+      return { who: 'zeak', text: `Security rejection escalated task to ${String(p['to'])} (attempt ${String(p['attempt'])})`, kind: 'system' }
+    case 'learning.guide_added':
+      return { who: 'learn', text: `New guide (${String(p['occurrences'])}x seen): ${String(p['guide'])}`, kind: 'system' }
+    case 'learning.guide_rejected':
+      return { who: 'learn', text: `Pattern rejected — ${String(p['reason'])} (${String(p['signature'])})`, kind: 'system' }
+    case 'learning.pattern_found':
+      return { who: 'learn', text: `Scanned the TRY BOX — ${String(p['candidates'])} recurring pattern(s) found`, kind: 'system' }
+    case 'collector.collected':
+      return { who: 'data', text: `Collected ${String(p['count'])} item(s) via ${String(p['via'])}: ${String(p['topic'])}`, kind: 'engine' }
+    case 'phase.change':
+      return { who: 'engine', text: `Phase → ${String(p['phase'])}`, kind: 'system' }
+    case 'run.completed':
+      return { who: 'crew', text: `Run completed ✓ — output ready to preview`, kind: 'engine' }
+    case 'run.failed':
+      return { who: 'engine', text: `Run failed: ${String(p['error'])}`, kind: 'alert' }
+    case 'compaction.done':
+      return { who: 'brain', text: `Compaction done — the Brain stayed small`, kind: 'system' }
+    default:
+      return { who: 'engine', text: `${event.type} ${JSON.stringify(event.payload).slice(0, 160)}`, kind: 'engine' }
+  }
+}
+
 function renderStream(): void {
   const list = byId<HTMLElement>('streamList')
   if (list === null) return
   clearChildren(list)
-  let i = 0
-  for (const event of deckEvents.slice(-80)) {
+  // Chat-worthy events only: preview.state/token.use are plumbing, not chat.
+  const visible = deckEvents.filter((e) => e.type !== 'preview.state' && e.type !== 'token.use')
+  const empty = byId<HTMLElement>('chatEmpty')
+  if (empty !== null) empty.style.display = visible.length === 0 ? '' : 'none'
+  for (const event of visible.slice(-120)) {
+    const line = chatLineFor(event)
     const row = document.createElement('div')
-    row.className = i % 2 === 1 ? 'streamrow alt' : 'streamrow'
+    row.className = `chatmsg ${line.kind}`
+    const avatar = document.createElement('div')
+    avatar.className = 'avatar'
+    avatar.textContent = line.who.slice(0, 4).toUpperCase()
+    const body = document.createElement('div')
+    body.className = 'body'
+    const meta = document.createElement('div')
+    meta.className = 'meta'
+    const who = document.createElement('span')
+    who.className = 'who'
+    who.textContent = line.who
     const time = document.createElement('time')
     time.textContent = event.at.slice(11, 19)
-    const tag = document.createElement('span')
-    tag.className = 'tg'
-    tag.textContent = event.type
+    meta.appendChild(who)
+    meta.appendChild(time)
     const tx = document.createElement('span')
     tx.className = 'tx'
-    tx.textContent = JSON.stringify(event.payload).slice(0, 220)
-    row.appendChild(time)
-    row.appendChild(tag)
-    row.appendChild(tx)
+    tx.textContent = line.text
+    body.appendChild(meta)
+    body.appendChild(tx)
+    row.appendChild(avatar)
+    row.appendChild(body)
     list.appendChild(row)
-    i += 1
   }
   const chat = byId<HTMLElement>('streamChat')
   if (chat !== null) chat.scrollTop = chat.scrollHeight
@@ -573,17 +652,20 @@ function reportInvokeError(context: string, error: unknown): void {
   if (status !== null) {
     const original = status.textContent
     status.textContent = `${context} failed: ${message}`
-    status.classList.add('status-error')
+    status.classList.add('warn')
     window.setTimeout(() => {
       status.textContent = original
+      status.classList.remove('warn')
     }, 6000)
   }
 }
 
-async function handleRun(): Promise<void> {
+/** Chat-first run: an optional brief override from the chat input; the
+ * Command view's brief/goal fields remain the fine-grained path. */
+async function handleRun(briefOverride?: string): Promise<void> {
   const bridge = deckBridge
   if (bridge === undefined) return
-  const brief = byId<HTMLTextAreaElement>('briefInput')?.value.trim() ?? ''
+  const brief = briefOverride ?? byId<HTMLTextAreaElement>('briefInput')?.value.trim() ?? ''
   const goalText = byId<HTMLTextAreaElement>('goalInput')?.value ?? ''
   const goalState = goalText
     .split(',')
@@ -638,7 +720,7 @@ function setStatus(text: string, connected: boolean): void {
   const status = byId<HTMLElement>('bridgeStatus')
   if (status !== null) {
     status.textContent = text
-    status.className = `chip ${connected ? 'mint' : 'mut'}`
+    status.className = `chip ${connected ? 'good' : 'dim'}`
   }
 }
 
@@ -688,6 +770,25 @@ async function boot(): Promise<void> {
 
 function mount(): void {
   initViews()
+  const chatForm = byId<HTMLFormElement>('chatForm')
+  if (chatForm !== null) {
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault()
+      const input = byId<HTMLInputElement>('chatInput')
+      const text = input?.value.trim() ?? ''
+      if (text.length === 0 || deckRunning) return
+      if (input !== null) input.value = ''
+      void handleRun(text)
+    })
+  }
+  const chatAbort = byId<HTMLButtonElement>('chatAbortBtn')
+  if (chatAbort !== null) chatAbort.addEventListener('click', () => { void handleAbort() })
+  for (const quick of Array.from(document.querySelectorAll<HTMLButtonElement>('.quick'))) {
+    quick.addEventListener('click', () => {
+      const text = quick.getAttribute('data-quick') ?? ''
+      if (text.length > 0 && !deckRunning) void handleRun(text)
+    })
+  }
   const runBtn = byId<HTMLButtonElement>('runBtn')
   if (runBtn !== null) runBtn.addEventListener('click', () => { void handleRun() })
   const abortBtn = byId<HTMLButtonElement>('abortBtn')

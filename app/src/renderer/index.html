@@ -12,11 +12,11 @@
 
     <!-- ── title bar ── -->
     <header class="titlebar">
-      <div class="brand">RUIC <span class="sub">COMMON-S AUTONOMOUS SYSTEM</span></div>
+      <div class="brand">RUIC<span class="brand-dot"></span> <span class="sub">COMMON-S AUTONOMOUS SYSTEM</span></div>
       <div class="tb-right">
-        <span id="phaseStrip" class="chip sea">Phase: idle</span>
-        <span id="bridgeStatus" class="chip mut">Bridge: disconnected</span>
-        <span class="chip hide-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:9px;height:9px"><rect x="6" y="10.5" width="12" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>LOCAL-ONLY</span>
+        <span id="phaseStrip" class="chip accent">Phase: idle</span>
+        <span id="bridgeStatus" class="chip dim">Bridge: disconnected</span>
+        <span class="chip dim hide-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:9px;height:9px"><rect x="6" y="10.5" width="12" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>LOCAL-ONLY</span>
       </div>
     </header>
 
@@ -25,30 +25,63 @@
       <nav class="sidebar">
         <div class="navhead">Workspace</div>
         <div class="nav">
-          <button class="navitem on" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-4"/></svg><span class="lb">Run Overview</span></button>
+          <button class="navitem on" data-nav="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v10.5H9l-5 4z"/></svg><span class="lb">Chat</span><span class="navpill" id="chatPill" style="display:none">live</span></button>
+          <button class="navitem" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-4"/></svg><span class="lb">Overview</span></button>
           <button class="navitem" data-nav="command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3L5 13.5h5L10.5 21 19 10.5h-5z"/></svg><span class="lb">Command</span></button>
           <button class="navitem" data-nav="findings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l6.5 2.7v4.6c0 4.2-2.7 7-6.5 8.7-3.8-1.7-6.5-4.5-6.5-8.7V6.2z"/><path d="M12 8.8v3.4"/><path d="M12 15.2h.01"/></svg><span class="lb">Findings</span><span class="navbadge" id="findingsBadge" style="display:none">0</span></button>
           <button class="navitem" data-nav="crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.5" cy="8.5" r="3"/><path d="M4 19c.5-3 2.7-4.5 5.5-4.5s5 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M17.5 14.6c2.3.4 3.7 1.8 4 4.4"/></svg><span class="lb">Crew</span></button>
           <button class="navitem" data-nav="preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.5h17"/></svg><span class="lb">Preview</span></button>
-          <button class="navitem" data-nav="stream"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v10.5H9l-5 4z"/></svg><span class="lb">Event Stream</span></button>
         </div>
         <div class="sidefoot">
-          <div class="keybtn"><span class="dot mint"></span>keystore · main-only keys</div>
-          <div class="engln"><i class="dot mint blink"></i>common-s · brain online</div>
+          <div class="keybtn"><span class="status-dot ok"></span>keystore · main-only keys</div>
+          <div class="engln"><i class="status-dot ok blink"></i>common-s · brain online</div>
         </div>
       </nav>
 
       <!-- ── main views ── -->
       <main class="main" id="main">
-        <div class="viewwrap">
+        <div class="viewwrap viewwrap-chat">
+
+          <!-- Chat — the main page -->
+          <section class="view view-chat on" id="v-chat">
+            <div class="chat-head">
+              <div>
+                <h1>RUIC Chat</h1>
+                <p>Type a brief below — the crew plans, builds, audits and merges while you watch</p>
+              </div>
+              <span id="chatPhase" class="chip accent">idle</span>
+            </div>
+            <div class="chat" id="streamChat">
+              <div class="chat-empty" id="chatEmpty">
+                <div class="chat-empty-glyph">RUIC</div>
+                <div class="chat-empty-title">What should the crew build?</div>
+                <div class="chat-empty-sub">One brief in. Laya routes it, engineers execute, security audits, Zeak guards every token — and the system learns from every failure.</div>
+                <div class="chat-empty-quick">
+                  <button class="quick" data-quick="build a trivial app">build a trivial app</button>
+                  <button class="quick" data-quick="write a readme for a calculator app">write a readme for a calculator app</button>
+                  <button class="quick" data-quick="fix a small typo in a css label">fix a small typo in a css label</button>
+                </div>
+              </div>
+              <div id="streamList"></div>
+            </div>
+            <form class="chatbar" id="chatForm">
+              <button type="button" class="chatbtn abort" id="chatAbortBtn" title="Abort the running deck" disabled>■</button>
+              <input id="chatInput" placeholder="Describe what to build — or ask the crew anything…" autocomplete="off" spellcheck="false" />
+              <button type="submit" class="chatbtn send" id="chatSendBtn" title="Send — starts a governed run">➤</button>
+            </form>
+            <div class="chatbar-foot">
+              <span>↵ send · runs are governed · local Qwen is free, frontier passes Zeak</span>
+              <span id="chatAbortHint" style="display:none">abort ■ stops the run gracefully</span>
+            </div>
+          </section>
 
           <!-- Overview -->
-          <section class="view on" id="v-overview">
+          <section class="view" id="v-overview">
             <div class="banner">
               <span id="runIdChip" class="runid">IDLE</span>
               <span class="t" id="runTitle">Awaiting a brief — nothing is running</span>
               <span style="flex:1"></span>
-              <span class="chip mut" id="elapsedChip">00:00:00</span>
+              <span class="chip dim" id="elapsedChip">00:00:00</span>
             </div>
             <div class="statgrid">
               <div class="stat"><div class="lbl">phase</div><div class="big" id="statPhase">idle</div><div class="cap" id="statPhaseCap">the crew is at rest</div></div>
@@ -58,7 +91,7 @@
             </div>
             <div class="duo">
               <div class="panel">
-                <div class="phead"><span>⌰ task ledger</span><span class="chip mut">live</span></div>
+                <div class="phead"><span>⌰ task ledger</span><span class="chip dim">live</span></div>
                 <div class="pbody scrollx">
                   <table class="tbl">
                     <thead><tr><th>ID</th><th>File</th><th>Holder</th><th>Status</th></tr></thead>
@@ -67,7 +100,7 @@
                 </div>
               </div>
               <div class="panel">
-                <div class="phead"><span>⋮⋮ routing &amp; economics</span><span class="chip mut">laya · zeak</span></div>
+                <div class="phead"><span>⋮⋮ routing &amp; economics</span><span class="chip dim">laya · zeak</span></div>
                 <div class="pbody">
                   <div class="feed" id="overviewRouting"></div>
                   <div class="feedempty" id="overviewRoutingEmpty">no routing decisions yet — run a brief</div>
@@ -78,7 +111,7 @@
 
           <!-- Command -->
           <section class="view" id="v-command">
-            <div class="vhead"><div><h1>Command</h1><p>One brief in — the crew plans, builds, audits and merges</p></div></div>
+            <div class="vhead"><div><h1>Command</h1><p>Fine-grained control — brief, goal state, and the raw run switch</p></div></div>
             <div class="duo">
               <div class="panel">
                 <div class="phead"><span>✎ brief &amp; goal</span></div>
@@ -88,14 +121,14 @@
                   <div class="fieldlbl">goal state (comma-separated criteria)</div>
                   <textarea id="goalInput" placeholder="Goal state (comma-separated criteria)..." spellcheck="false"></textarea>
                   <div class="btnrow">
-                    <button id="runBtn" class="btn sea">▶ Run Deck</button>
+                    <button id="runBtn" class="btn primary">▶ Run Deck</button>
                     <button id="abortBtn" class="btn danger" disabled>■ Abort</button>
                   </div>
                   <div class="cap" style="margin-top:10px">Laya routes trivial briefs to the free local executor; heavy ones decompose through Dept 4. Zeak caps every paid call.</div>
                 </div>
               </div>
               <div class="panel">
-                <div class="phead"><span>⌁ default crew</span><span class="chip mint"><i class="dot mint"></i>local-first</span></div>
+                <div class="phead"><span>⌁ default crew</span><span class="chip good"><span class="status-dot ok"></span>local-first</span></div>
                 <div class="pbody">
                   <div id="crewRoster" class="crew-roster"></div>
                   <div class="cap" style="margin-top:10px">engineer + security scan on qwen2.5-coder (Ollama, free) · lead stays frontier behind Zeak</div>
@@ -106,7 +139,7 @@
 
           <!-- Findings -->
           <section class="view" id="v-findings">
-            <div class="vhead"><div><h1>Findings</h1><p>Security-audit output — every raise and resolution, with the flagged line</p></div><span class="chip mut">dept 5 · free scanning</span></div>
+            <div class="vhead"><div><h1>Findings</h1><p>Security-audit output — every raise and resolution, with the flagged line</p></div><span class="chip dim">dept 5 · free scanning</span></div>
             <div class="panel" style="margin-bottom:12px">
               <div class="phead"><span>⚡ routing &amp; economics feed</span></div>
               <div class="pbody"><div class="feed" id="routingFeedHolder"></div></div>
@@ -152,12 +185,6 @@
             </div>
           </section>
 
-          <!-- Event Stream -->
-          <section class="view" id="v-stream">
-            <div class="vhead"><div><h1>Event Stream</h1><p>Everything the engine emits — journaled, ordered, replayable</p></div><span class="chip mut">deck:events:batch + replay</span></div>
-            <div class="chat" id="streamChat"><div id="streamList"></div></div>
-          </section>
-
         </div>
       </main>
     </div>
@@ -166,7 +193,7 @@
     <footer class="statusbar">
       <span class="ok" id="sbBridge">● bridge</span>
       <span id="elapsedTimer" class="mono">00:00:00</span>
-      <span id="tokenSpend" class="sea">Tokens: 0</span>
+      <span id="tokenSpend" class="accent">Tokens: 0</span>
       <span class="grow"></span>
       <span class="hide-s">common-s v2 · brain + laya + zeak + 5 depts</span>
     </footer>
