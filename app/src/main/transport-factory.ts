@@ -100,20 +100,56 @@ export interface BuiltTransport {
  * Model ids the engine uses internally (for example the compactor's
  * `compactor-small`) fall back to the lead model's transport, mirroring the
  * engine's own adapter defaults.
+ *
+ * Common-S: transports are built LAZILY, on first use per model id. The
+ * engine's key resolution is mandatory and eager per model, so building the
+ * frontier lead up front made every run fail with API_KEY_MISSING — even a
+ * fully local Laya-routed run that never calls the lead. Trivial tasks never
+ * reach paid APIs, so their key must never be REQUIRED.
  */
 export function buildEngineTransport(config: DeckConfigInput, engine: LoadedEngine): BuiltTransport {
   const registry = new engine.ModelRegistry({ keystoreDir: resolveKeystoreDir(engine.engineRoot) })
 
-  const lead = buildModelTransport(registry, config.crew.lead)
-  const byId = new Map<string, EngineTransport>()
-  byId.set(config.crew.lead.id, lead)
+  const refs = new Map<string, BridgeModelRef>()
+  refs.set(config.crew.lead.id, config.crew.lead)
   for (const ref of [...config.crew.engineers, ...config.crew.security]) {
-    byId.set(ref.id, buildModelTransport(registry, ref))
+    refs.set(ref.id, ref)
   }
 
+  const built = new Map<string, EngineTransport>()
+  const buildOrMissing = (ref: BridgeModelRef): EngineTransport => {
+    try {
+      return buildModelTransport(registry, ref)
+    } catch (err) {
+      // Key missing for a model nobody has called yet: return a transport
+      // that fails only when actually used, with a precise message.
+      const message = err instanceof Error ? err.message : String(err)
+      return {
+        complete() {
+          throw new Error(`model "${ref.id}" is not callable: ${message}`)
+        },
+      }
+    }
+  }
+
+  const leadId = config.crew.lead.id
   const transport: EngineTransport = {
     complete(req) {
-      const chosen = byId.get(req.modelId) ?? lead
+      const ref = refs.get(req.modelId)
+      if (ref === undefined) {
+        // Engine-internal ids (compactor-small etc.) ride the lead's ref.
+        let leadT = built.get(leadId)
+        if (leadT === undefined) {
+          leadT = buildOrMissing(refs.get(leadId)!)
+          built.set(leadId, leadT)
+        }
+        return leadT.complete(req)
+      }
+      let chosen = built.get(req.modelId)
+      if (chosen === undefined) {
+        chosen = buildOrMissing(ref)
+        built.set(req.modelId, chosen)
+      }
       return chosen.complete(req)
     },
   }
