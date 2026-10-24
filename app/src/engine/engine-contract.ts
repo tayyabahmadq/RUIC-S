@@ -410,7 +410,7 @@ export interface EngineWireOptions {
   gate?: { failOn?: Severity }
   /** Common-S v2 (all optional — absent = shipped behavior). */
   commonS?: {
-    embed?: (text: string) => Promise<number[]>
+    embed?: (text: string) => Promise<number[] | null>
     fallbackModelId?: string
     departmentCaps?: Record<string, number>
     escalationBudget?: number

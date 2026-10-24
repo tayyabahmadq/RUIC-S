@@ -316,3 +316,9 @@ Re-freeze aggregate `04BA4193E5F20C6CAB2C2951B150DA96AED079D5F20C1AB96930E2A6FEA
 - Channels default to the no-login free set (`websearch`, `github`); no paid-key channel (YouTube STT) is ever invoked by the engine.
 
 Verification: engine suite 162/162 (7 new Agent-Reach tests), gate re-run before push.
+
+### Local executor online (2026-10-25)
+
+- Ollama 0.40.11 installed; `qwen2.5-coder:1.5b` (986 MB) + `nomic-embed-text` (274 MB) pulled.
+- Empirical context ladder verdict: **32768, 100% GPU (2.1 GB)**. 65536 is IMPOSSIBLE on this model — the qwen2 architecture caps context_length at 32768 and Ollama silently clamps; the ladder's honest winner is 32K (recorded in COMMONS/STATE/context.txt).
+- The Brain embedder is wired in the deck's main process (local nomic-embed-text via Ollama; null on failure degrades vector ops to miss-only).

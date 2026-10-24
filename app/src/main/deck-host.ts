@@ -607,6 +607,24 @@ export class DeckHost {
           ...(config.crew.engineers.some((e) => e.endpoint !== undefined && e.endpoint.includes('11434'))
             ? { fallbackModelId: config.crew.engineers.find((e) => e.endpoint !== undefined && e.endpoint.includes('11434'))!.id }
             : {}),
+          // Brain embedder: local nomic-embed-text via Ollama. A null return
+          // (server down) degrades the vector store to miss-only; it never
+          // breaks a run.
+          embed: async (text: string): Promise<number[] | null> => {
+            try {
+              const res = await fetch('http://localhost:11434/api/embeddings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: 'nomic-embed-text', prompt: text.slice(0, 8000) }),
+                signal: AbortSignal.timeout(30_000),
+              })
+              if (!res.ok) return null
+              const data = (await res.json()) as { embedding?: unknown }
+              return Array.isArray(data.embedding) ? (data.embedding as number[]) : null
+            } catch {
+              return null
+            }
+          },
         },
       })
       this.currentWired = wired
