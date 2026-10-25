@@ -33,6 +33,13 @@ function isTaskLike(item: unknown): item is Task {
   return item !== null && typeof item === 'object' && typeof (item as Task).id === 'string' && typeof (item as Task).path === 'string'
 }
 
+/** Corrective retry prompt for verify verdicts (small-model compliance). */
+const VERIFY_CORRECTIVE =
+  'Your previous response was not valid JSON matching the required verdict schema. ' +
+  'Respond with ONLY one JSON object: {"satisfied": boolean, "evidence": string}. ' +
+  'The evidence must be a non-empty string describing what you checked. No markdown fences and no prose. ' +
+  'Example: {"satisfied": true, "evidence": "WORKSPACE/README.md exists and covers the calculator features."}'
+
 export class Leader {
   private readonly transport: Transport
   private readonly commons: Commons
@@ -159,11 +166,25 @@ export class Leader {
       const workspace = await this.snapshotWorkspace()
       const results: VerificationResult[] = []
       for (const criterion of list) {
-        const response = await this.transport.completion({
-          modelId: (await this.requireCrew()).lead,
-          messages: this.verifyMessages(criterion, workspace),
-        })
-        results.push(this.parseVerifyVerdict(criterion, response.text))
+        const lead = (await this.requireCrew()).lead
+        const messages = this.verifyMessages(criterion, workspace)
+        let response = await this.transport.completion({ modelId: lead, messages })
+        let verdict: VerificationResult
+        try {
+          verdict = this.parseVerifyVerdict(criterion, response.text)
+        } catch {
+          // Small local models frequently miss the strict verdict shape on
+          // the first try. One corrective retry with the exact JSON shape
+          // (same discipline as the worker's PARSE_FAILED retry).
+          const corrective: Message[] = [
+            ...messages,
+            { role: 'assistant', content: response.text },
+            { role: 'user', content: VERIFY_CORRECTIVE },
+          ]
+          response = await this.transport.completion({ modelId: lead, messages: corrective })
+          verdict = this.parseVerifyVerdict(criterion, response.text)
+        }
+        results.push(verdict)
       }
       await this.commons.write(VERIFY_CRITERIA_KEY, list)
       await this.commons.write(VERIFICATIONS_KEY, results)
@@ -261,8 +282,20 @@ export class Leader {
 
   private extractJson(text: string): string {
     const cleaned = text.trim()
-    const match = cleaned.match(/```json\s*\n([\s\S]*?)\n\s*```/)
-    return match ? match[1].trim() : cleaned
+    const fenced = cleaned.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/)
+    if (fenced) return fenced[1].trim()
+    if (cleaned.startsWith('{') || cleaned.startsWith('[')) return cleaned
+    // Prose-wrapped JSON: take the outermost brace/bracket span.
+    const firstObj = cleaned.indexOf('{')
+    const firstArr = cleaned.indexOf('[')
+    const start = firstArr !== -1 && (firstArr < firstObj || firstObj === -1) ? firstArr : firstObj
+    if (start !== -1) {
+      const open = cleaned[start]
+      const close = open === '{' ? '}' : ']'
+      const end = cleaned.lastIndexOf(close)
+      if (end > start) return cleaned.slice(start, end + 1)
+    }
+    return cleaned
   }
 
   private parsePlanTasks(text: string): Task[] {
@@ -283,11 +316,24 @@ export class Leader {
   }
 
   private parseVerifyVerdict(criterion: string, text: string): VerificationResult {
-    let parsed: { satisfied: boolean; evidence: string }
-    try { parsed = z.object({ satisfied: z.boolean(), evidence: z.string().min(1) }).parse(JSON.parse(this.extractJson(text))) } catch (err) {
-      throw new CommonsError('LEADER_INVALID_VERDICT', `Verification returned invalid JSON for criterion: ${criterion}`, { detail: text.slice(0, 1000), cause: err })
+    // Tolerant verdict parse (Gate 0 finding): small local models return
+    // booleans as strings, omit evidence, or wrap JSON in prose/fences.
+    try {
+      const raw = JSON.parse(this.extractJson(text)) as Record<string, unknown>
+      let satisfied: boolean | null = null
+      if (typeof raw['satisfied'] === 'boolean') satisfied = raw['satisfied']
+      else if (raw['satisfied'] === 'true') satisfied = true
+      else if (raw['satisfied'] === 'false') satisfied = false
+      else if (raw['verdict'] === 'pass' || raw['verdict'] === 'satisfied') satisfied = true
+      else if (raw['verdict'] === 'fail' || raw['verdict'] === 'unsatisfied') satisfied = false
+      const evidence = typeof raw['evidence'] === 'string' && (raw['evidence'] as string).trim().length > 0
+        ? (raw['evidence'] as string)
+        : `criterion: ${criterion}`
+      if (satisfied !== null) return { criterion, satisfied, evidence }
+    } catch {
+      // fall through to the strict error
     }
-    return { criterion, satisfied: parsed.satisfied, evidence: parsed.evidence }
+    throw new CommonsError('LEADER_INVALID_VERDICT', `Verification returned invalid JSON for criterion: ${criterion}`, { detail: text.slice(0, 1000) })
   }
 
   private async snapshotWorkspace(): Promise<string> {

@@ -23,7 +23,8 @@ import { currentEntries as currentWorkingSetEntries } from './lru.js'
 const CORRECTIVE_NOTE =
   'Your previous response was not valid JSON matching the required schema. ' +
   'Respond with ONLY one JSON object: {"intent": string, "path": string, "added": string[], "atLine": number, "removedLineCount": number}. ' +
-  'No markdown fences and no prose.'
+  'No markdown fences and no prose. ' +
+  'Example of the EXACT required shape: {"intent":"create the file with a readme","path":"WORKSPACE/README.md","added":["# Calculator","A simple app."],"atLine":1,"removedLineCount":0}'
 
 /** R21 (E1): token usage for one completion, exactly as a phase-02 `usage`
  * chunk reports it. Recorded verbatim — never synthesized. */
@@ -214,16 +215,45 @@ async function readCommonsText(commons: { read?: unknown }, path: string): Promi
   }
 }
 
-async function writeCommons(commons: { write?: unknown }, intent: WriteIntent, author: string): Promise<void> {
+async function writeCommons(commons: { write?: unknown; read?: unknown }, intent: WriteIntent, author: string): Promise<void> {
   const writeFn = asCallable((commons as Record<string, unknown>)['write'])
   if (!writeFn) throw new CrewCommonsError('COMMONS_UNAVAILABLE', 'commons client has no write method')
+
+  // Small-model normalization (Gate 0 finding): local models produce valid
+  // CONTENT in an invalid SHAPE. Normalize at the seam instead of failing:
+  //  1. embedded newlines in added[] expand into single-line entries
+  //     (commons requires one line per entry; a readme NEEDS newlines);
+  //  2. atLine clamps to the target file's real bounds (models guess line
+  //     numbers);
+  //  3. removedLineCount clamps to what is actually removable.
+  const added: string[] = []
+  for (const entry of intent.added) {
+    for (const line of String(entry).split(String.fromCharCode(13, 10))) added.push(line)
+  }
+  let atLine = Math.max(1, Math.floor(Number(intent.atLine)) || 1)
+  let removedLineCount = Math.max(0, Math.floor(Number(intent.removedLineCount)) || 0)
+  const readFn = asCallable((commons as Record<string, unknown>)['read'])
+  if (readFn) {
+    try {
+      const current = await readFn.call(commons, intent.path)
+      const text = typeof current === 'string' ? current : String(current ?? '')
+      const NL = String.fromCharCode(10)
+      const lines = text === '' ? 0 : text.split(NL).length - (text.endsWith(NL) ? 1 : 0)
+      if (atLine > lines + 1) atLine = lines + 1
+      const maxRemovable = Math.max(0, lines - (atLine - 1))
+      if (removedLineCount > maxRemovable) removedLineCount = maxRemovable
+    } catch {
+      // new file — nothing to clamp against
+    }
+  }
+
   const payload = {
     intent: intent.intent,
     path: intent.path,
     author,
-    added: [...intent.added],
-    atLine: intent.atLine,
-    removedLineCount: intent.removedLineCount,
+    added,
+    atLine,
+    removedLineCount,
   }
   await writeFn.call(commons, payload)
 }
@@ -381,8 +411,13 @@ export class EngineerWorker {
         try {
           intent = parseWriteIntent(rawOutput)
         } catch {
-          bus?.emit('run.failed', {
-            modelId: this.modelId, taskId: task.id, rawOutput,
+          // A task-level parse failure is NOT a run failure: emitting
+          // run.failed here flipped the ledger to 'failed' while the host
+          // pipeline continued to 'completed' — incoherent state. The
+          // worker's catch records task.failed + the TRY BOX entry; only
+          // the HOST decides the run's fate.
+          bus?.emit('task.parse_failed', {
+            taskId: task.id, modelId: this.modelId,
             error: 'model output did not match the write-intent wire format',
           })
           throw new CrewCommonsError('PARSE_FAILED', 'model output did not match the write-intent wire format', rawOutput)

@@ -262,11 +262,17 @@ export class ReviewAgent {
     } catch {
       // not found — first write
     }
+    // commons counts lines the way splitLines does: a trailing newline does
+    // NOT start a new line. Counting it here inflated removedLineCount by one
+    // on every rewrite and threw 'diff out of range' on the second audit.
+    const currentLines = current === ''
+      ? 0
+      : current.split(/\r?\n/).length - (current.endsWith('\n') ? 1 : 0)
     await this.deps.commons.write({
       path: `STATE/folder-11/reviews/${request.runId}.json`,
       diff: {
         added: auditContent.split('\n'),
-        removedLineCount: current ? current.split('\n').length : 0,
+        removedLineCount: currentLines,
         atLine: 1,
       },
       intent: 'review audit',
