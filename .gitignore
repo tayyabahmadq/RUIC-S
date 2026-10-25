@@ -22,3 +22,4 @@ keystores/
 *.log
 .DS_Store
 Thumbs.db
+dist-exe/

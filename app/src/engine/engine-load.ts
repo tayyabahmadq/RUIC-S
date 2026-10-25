@@ -25,12 +25,23 @@ import type {
 
 const nodeRequire = createRequire(__filename)
 
-/** The engine workspace root (overridable for tests / packaging). */
+/** The engine workspace root (overridable for tests / packaging).
+ * Resolution order:
+ *   1. OPUS_DECK_ENGINE_DIR env override (tests / manual),
+ *   2. the dev-tree relative path (running from source),
+ *   3. the packaged location: <resourcesPath>/engine — where electron-builder's
+ *      extraResources places the bundled opus-deck-software (dist + zod). */
 export function resolveEngineRoot(): string {
   const override = process.env['OPUS_DECK_ENGINE_DIR']
   if (override !== undefined && override.trim() !== '') return path.resolve(override.trim())
   // app/src|dist/engine/engine-load.js -> up three levels lands on studio root
-  return path.resolve(__dirname, '..', '..', '..', 'opus-deck-software')
+  const devRoot = path.resolve(__dirname, '..', '..', '..', 'opus-deck-software')
+  if (fs.existsSync(path.join(devRoot, 'package.json'))) return devRoot
+  const packaged = process.resourcesPath !== undefined
+    ? path.join(process.resourcesPath as unknown as string, 'engine')
+    : ''
+  if (packaged !== '' && fs.existsSync(path.join(packaged, 'package.json'))) return packaged
+  return devRoot
 }
 
 function engineDistFile(engineRoot: string, ...segments: string[]): string {
