@@ -3,79 +3,121 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self'" />
+      content="default-src 'self' file:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'" />
   <title>Ruic — Control Deck</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="win">
 
-    <!-- ── title bar ── -->
+    <!-- ── title bar: traffic lights · project pill · state chips ── -->
     <header class="titlebar">
-      <div class="brand">RUIC<span class="brand-dot"></span> <span class="sub">COMMON-S AUTONOMOUS SYSTEM</span></div>
+      <div class="traffic"><i class="tl-r"></i><i class="tl-y"></i><i class="tl-g"></i></div>
+      <div class="project-pill">ruic — common-s</div>
       <div class="tb-right">
         <span id="phaseStrip" class="chip accent">Phase: idle</span>
         <span id="bridgeStatus" class="chip dim">Bridge: disconnected</span>
-        <span class="chip dim hide-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:9px;height:9px"><rect x="6" y="10.5" width="12" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>LOCAL-ONLY</span>
       </div>
     </header>
 
     <div class="shell">
-      <!-- ── sidebar nav ── -->
-      <nav class="sidebar">
-        <div class="navhead">Workspace</div>
-        <div class="nav">
-          <button class="navitem on" data-nav="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v10.5H9l-5 4z"/></svg><span class="lb">Chat</span><span class="navpill" id="chatPill" style="display:none">live</span></button>
-          <button class="navitem" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-4"/></svg><span class="lb">Overview</span></button>
-          <button class="navitem" data-nav="command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3L5 13.5h5L10.5 21 19 10.5h-5z"/></svg><span class="lb">Command</span></button>
-          <button class="navitem" data-nav="findings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l6.5 2.7v4.6c0 4.2-2.7 7-6.5 8.7-3.8-1.7-6.5-4.5-6.5-8.7V6.2z"/><path d="M12 8.8v3.4"/><path d="M12 15.2h.01"/></svg><span class="lb">Findings</span><span class="navbadge" id="findingsBadge" style="display:none">0</span></button>
-          <button class="navitem" data-nav="crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.5" cy="8.5" r="3"/><path d="M4 19c.5-3 2.7-4.5 5.5-4.5s5 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M17.5 14.6c2.3.4 3.7 1.8 4 4.4"/></svg><span class="lb">Crew</span></button>
-          <button class="navitem" data-nav="preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.5h17"/></svg><span class="lb">Preview</span></button>
-        </div>
-        <div class="sidefoot">
-          <div class="keybtn"><span class="status-dot ok"></span>keystore · main-only keys</div>
-          <div class="engln"><i class="status-dot ok blink"></i>common-s · brain online</div>
+
+      <!-- ── activity bar (icon rail) ── -->
+      <nav class="activitybar">
+        <button class="navitem act on" data-nav="chat" title="Chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v10.5H9l-5 4z"/></svg></button>
+        <button class="navitem act" data-nav="overview" title="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-4"/></svg></button>
+        <button class="navitem act" data-nav="command" title="Command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3L5 13.5h5L10.5 21 19 10.5h-5z"/></svg></button>
+        <button class="navitem act" data-nav="findings" title="Findings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l6.5 2.7v4.6c0 4.2-2.7 7-6.5 8.7-3.8-1.7-6.5-4.5-6.5-8.7V6.2z"/><path d="M12 8.8v3.4"/><path d="M12 15.2h.01"/></svg><span class="actbadge" id="findingsBadge" style="display:none">0</span></button>
+        <button class="navitem act" data-nav="crew" title="Crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="9.5" cy="8.5" r="3"/><path d="M4 19c.5-3 2.7-4.5 5.5-4.5s5 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M17.5 14.6c2.3.4 3.7 1.8 4 4.4"/></svg></button>
+        <button class="navitem act" data-nav="preview" title="Preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.5h17"/></svg></button>
+        <div class="actfoot">
+          <div class="actdot ok" title="keystore — keys live in main only"></div>
+          <div class="actdot ok blink" title="common-s — brain online"></div>
         </div>
       </nav>
 
-      <!-- ── main views ── -->
+      <!-- ── explorer sidebar ── -->
+      <aside class="explorer">
+        <div class="exhead">Explorer</div>
+        <div class="exsection">
+          <div class="exsec-title">ruic</div>
+          <button class="navitem exrow" data-nav="chat"><span class="exlabel">chat</span><span class="navpill" id="chatPill" style="display:none">live</span></button>
+          <button class="navitem exrow" data-nav="overview"><span class="exlabel">overview</span></button>
+          <button class="navitem exrow" data-nav="command"><span class="exlabel">command</span></button>
+          <button class="navitem exrow" data-nav="findings"><span class="exlabel">findings</span></button>
+          <button class="navitem exrow" data-nav="crew"><span class="exlabel">crew</span></button>
+          <button class="navitem exrow" data-nav="preview"><span class="exlabel">preview</span></button>
+        </div>
+        <div class="exsection">
+          <div class="exsec-title">COMMONS</div>
+          <div class="extree">
+            <div class="exitem"><span class="exfile">▸</span>BRIEF.md</div>
+            <div class="exitem"><span class="exfolder">▾</span>STATE<span class="exmuted">  contracts · trybox · guides · vectors</span></div>
+            <div class="exitem"><span class="exfolder">▾</span>WORKSPACE<span class="exmuted">  artifacts</span></div>
+            <div class="exitem"><span class="exfolder">▸</span>ARCHIVE<span class="exmuted">  digests · guides@vN</span></div>
+          </div>
+        </div>
+        <div class="exsection">
+          <div class="exsec-title">ZEAK</div>
+          <div class="extree">
+            <div class="exitem"><span class="exkey">economic guard</span><span class="exmuted">  cache · prune · cap · stop</span></div>
+            <div class="exitem"><span class="exkey">the teacher</span><span class="exmuted">  trybox → model 2/3 → guides</span></div>
+          </div>
+        </div>
+        <div class="exfoot">
+          <div class="keybtn"><span class="status-dot ok"></span>keystore · main-only</div>
+          <div class="engln"><i class="status-dot ok blink"></i>engine · brain online</div>
+        </div>
+      </aside>
+
+      <!-- ── main / editor area ── -->
       <main class="main" id="main">
         <div class="viewwrap viewwrap-chat">
 
-          <!-- Chat — the main page -->
+          <!-- ═══ CHAT — the editor-grade main view ═══ -->
           <section class="view view-chat on" id="v-chat">
-            <div class="chat-head">
-              <div>
-                <h1>RUIC Chat</h1>
-                <p>Type a brief below — the crew plans, builds, audits and merges while you watch</p>
+            <div class="chatpanelfull">
+              <div class="chatpanel-head">
+                <span class="cp-title">RUIC Chat</span>
+                <span id="chatPhase" class="chip dim">idle</span>
               </div>
-              <span id="chatPhase" class="chip accent">idle</span>
-            </div>
-            <div class="chat" id="streamChat">
-              <div class="chat-empty" id="chatEmpty">
-                <div class="chat-empty-glyph">RUIC</div>
-                <div class="chat-empty-title">What should the crew build?</div>
-                <div class="chat-empty-sub">One brief in. Laya routes it, engineers execute, security audits, Zeak guards every token — and the system learns from every failure.</div>
-                <div class="chat-empty-quick">
-                  <button class="quick" data-quick="build a trivial app">build a trivial app</button>
-                  <button class="quick" data-quick="write a readme for a calculator app">write a readme for a calculator app</button>
-                  <button class="quick" data-quick="fix a small typo in a css label">fix a small typo in a css label</button>
+              <div class="chat" id="streamChat">
+                <div class="chat-empty" id="chatEmpty">
+                  <div class="chat-watermark">RUIC</div>
+                  <div class="chat-empty-title">What should the crew build?</div>
+                  <div class="chat-empty-sub">One brief in. Laya routes it, engineers execute, security audits, Zeak guards every token — and the system learns from every failure.</div>
+                  <div class="chat-empty-quick">
+                    <button class="quick" data-quick="build a trivial app">build a trivial app</button>
+                    <button class="quick" data-quick="write a readme for a calculator app">write a readme for a calculator app</button>
+                    <button class="quick" data-quick="fix a small typo in a css label">fix a small typo in a css label</button>
+                  </div>
+                </div>
+                <div id="streamList"></div>
+              </div>
+              <div class="chatbottom">
+                <form class="chatcard" id="chatForm">
+                  <div class="chatcard-row">
+                    <button type="button" class="chatbtn abort" id="chatAbortBtn" title="Abort the running deck" disabled>■</button>
+                    <input id="chatInput" placeholder="Do anything — describe what to build…" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="chatcard-toolbar">
+                    <span class="tool-ic" title="quick starts are above when the transcript is empty">+</span>
+                    <span class="modelchip">qwen · local</span>
+                    <span class="modelchip dim">free</span>
+                    <span class="grow"></span>
+                    <button type="submit" class="sendcircle" id="chatSendBtn" title="Send — starts a governed run">➤</button>
+                  </div>
+                </form>
+                <div class="chatbar-foot">
+                  <span>↵ send · runs are governed · frontier passes Zeak</span>
+                  <span id="chatAbortHint" style="display:none">abort ■ stops the run gracefully</span>
+                  <span class="worklocally">▤ work locally · ollama</span>
                 </div>
               </div>
-              <div id="streamList"></div>
-            </div>
-            <form class="chatbar" id="chatForm">
-              <button type="button" class="chatbtn abort" id="chatAbortBtn" title="Abort the running deck" disabled>■</button>
-              <input id="chatInput" placeholder="Describe what to build — or ask the crew anything…" autocomplete="off" spellcheck="false" />
-              <button type="submit" class="chatbtn send" id="chatSendBtn" title="Send — starts a governed run">➤</button>
-            </form>
-            <div class="chatbar-foot">
-              <span>↵ send · runs are governed · local Qwen is free, frontier passes Zeak</span>
-              <span id="chatAbortHint" style="display:none">abort ■ stops the run gracefully</span>
             </div>
           </section>
 
-          <!-- Overview -->
+          <!-- ═══ OVERVIEW ═══ -->
           <section class="view" id="v-overview">
             <div class="banner">
               <span id="runIdChip" class="runid">IDLE</span>
@@ -109,7 +151,7 @@
             </div>
           </section>
 
-          <!-- Command -->
+          <!-- ═══ COMMAND ═══ -->
           <section class="view" id="v-command">
             <div class="vhead"><div><h1>Command</h1><p>Fine-grained control — brief, goal state, and the raw run switch</p></div></div>
             <div class="duo">
@@ -137,7 +179,7 @@
             </div>
           </section>
 
-          <!-- Findings -->
+          <!-- ═══ FINDINGS ═══ -->
           <section class="view" id="v-findings">
             <div class="vhead"><div><h1>Findings</h1><p>Security-audit output — every raise and resolution, with the flagged line</p></div><span class="chip dim">dept 5 · free scanning</span></div>
             <div class="panel" style="margin-bottom:12px">
@@ -150,7 +192,7 @@
             </div>
           </section>
 
-          <!-- Crew -->
+          <!-- ═══ CREW ═══ -->
           <section class="view" id="v-crew">
             <div class="vhead"><div><h1>Crew</h1><p>Swappable stateless workers — health probed from main, keys never cross the bridge</p></div></div>
             <div id="crewRosterBig" class="crewgrid"></div>
@@ -180,7 +222,7 @@
             <div class="statgrid" style="grid-template-columns:repeat(2,1fr)" id="assignGrid"></div>
           </section>
 
-          <!-- Preview -->
+          <!-- ═══ PREVIEW ═══ -->
           <section class="view" id="v-preview">
             <div class="vhead"><div><h1>Preview</h1><p>Sandboxed view of the merged output — file:// inside the run's outputDir only</p></div></div>
             <div class="pvgrid">
@@ -214,11 +256,13 @@
 
     <!-- ── status bar ── -->
     <footer class="statusbar">
-      <span class="ok" id="sbBridge">● bridge</span>
-      <span id="elapsedTimer" class="mono">00:00:00</span>
-      <span id="tokenSpend" class="accent">Tokens: 0</span>
+      <span class="sb-item sb-branch">⎇ commons</span>
+      <span class="sb-item ok" id="sbBridge">● bridge</span>
+      <span class="sb-item hide-s">zeak · guard on</span>
       <span class="grow"></span>
-      <span class="hide-s">common-s v2 · brain + laya + zeak + 5 depts</span>
+      <span class="sb-item mono" id="elapsedTimer">00:00:00</span>
+      <span class="sb-item sb-gold mono" id="tokenSpend">Tokens: 0</span>
+      <span class="sb-remote hide-s">qwen · local</span>
     </footer>
   </div>
 

@@ -34,7 +34,7 @@ const baselinePath = path.join(root, 'scripts', 'engine-baseline.txt')
 // [E1-RF], [E2-B3], [E3-B2] and [E3R-B1].
 // Common-S v2 re-freeze (sanctioned engine phase: Brain/Laya/Zeak/Dept2 +
 // exit-path contracts + handoff re-queue). Regenerated via scripts/refreeze.mjs.
-const EXPECTED_AGGREGATE = '2A55D5874DCE30E65B4B9C4BBD04D200CB744B315C7458646ECDAD67936766C3'
+const EXPECTED_AGGREGATE = 'A38C17E1AB8FB4735804AC9EDA2E4C3D594D8C998A26354D1676542D41896A19'
 // Common-S v2: the gate asserts ALL tests pass, not an exact count — an
 // exact number went stale with every added test. Counts stay visible above.
 const EXPECTED_ENGINE_TESTS = null
