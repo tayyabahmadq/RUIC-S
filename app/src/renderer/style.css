@@ -273,3 +273,6 @@ input::placeholder,textarea::placeholder{color:var(--muted2)}
 .statusbar .sb-branch{color:var(--accent)}
 .statusbar .sb-gold{color:var(--gold)}
 .statusbar .sb-remote{color:var(--tan)}
+.statusbar .sb-item.warn{color:var(--coral)}
+/* "run open" state — applied to BOTH bars in lockstep */
+.chip.live,.sb-item.live{animation:pp 1.9s ease-in-out infinite}

@@ -285,10 +285,25 @@ function addCell(row: HTMLTableRowElement, text: string, className?: string): vo
 function render(): void {
   if (typeof document === 'undefined') return
 
-  const phaseStrip = byId<HTMLElement>('phaseStrip')
-  if (phaseStrip !== null) {
-    phaseStrip.textContent = `Phase: ${deckState.phase}`
-    phaseStrip.className = `chip accent`
+  // The two bars (titlebar + statusbar) are one state surface: the same run,
+  // phase, and bridge text is written to both, and the "run open" accent is
+  // toggled on both in lockstep — idle (closed) and running (open) always agree.
+  const runText = `⎇ ${deckState.runId !== '' ? deckState.runId : 'idle'}`
+  const phaseText = `phase: ${deckState.phase}`
+  for (const id of ['tbRun', 'sbBranch']) {
+    const el = byId<HTMLElement>(id)
+    if (el !== null) {
+      el.textContent = runText
+      el.classList.toggle('live', deckRunning)
+    }
+  }
+  for (const id of ['phaseStrip', 'sbPhase']) {
+    const el = byId<HTMLElement>(id)
+    if (el !== null) {
+      el.textContent = phaseText
+      el.className = deckRunning ? 'chip accent live' : 'chip dim'
+      if (id === 'sbPhase') el.className = deckRunning ? 'sb-item accent live' : 'sb-item dim'
+    }
   }
   renderOverviewStats()
 
@@ -439,7 +454,10 @@ function render(): void {
   const bridgeStatusEl = byId<HTMLElement>('bridgeStatus')
   const sbBridge = byId<HTMLElement>('sbBridge')
   if (sbBridge !== null && bridgeStatusEl !== null) {
-    sbBridge.textContent = bridgeStatusEl.textContent !== null && bridgeStatusEl.textContent.startsWith('Bridge: connected') ? '● bridge live' : '● bridge down'
+    // Exact mirror — including transient invoke-error text and its warn state.
+    sbBridge.textContent = bridgeStatusEl.textContent
+    sbBridge.classList.toggle('warn', bridgeStatusEl.classList.contains('warn'))
+    sbBridge.classList.toggle('ok', bridgeStatusEl.classList.contains('good'))
   }
   const findingsBadge = byId<HTMLElement>('findingsBadge')
   if (findingsBadge !== null) {
@@ -864,9 +882,7 @@ function setStatus(text: string, connected: boolean): void {
     status.textContent = text
     status.className = `chip ${connected ? 'good' : 'dim'}`
   }
-}
-
-/* View switcher: presentation-only navigation between the shell views. */
+}/* View switcher: presentation-only navigation between the shell views. */
 function initViews(): void {
   const navItems = document.querySelectorAll<HTMLElement>('.navitem')
   for (const item of Array.from(navItems)) {
@@ -891,12 +907,12 @@ function startTimer(): void {
 async function boot(): Promise<void> {
   const bridge = typeof window !== 'undefined' ? window.__deckBridge__ : undefined
   if (bridge === undefined) {
-    setStatus('Bridge: unavailable', false)
+    setStatus('● bridge unavailable', false)
     deckReady = true
     return
   }
   deckBridge = bridge
-  setStatus('Bridge: connected', true)
+  setStatus('● bridge live', true)
 
   // Subscribe FIRST (the first batch carries whatever history exists), then
   // replay. Dedupe by event id makes the overlap harmless.

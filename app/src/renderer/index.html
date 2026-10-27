@@ -15,8 +15,9 @@
       <div class="traffic"><i class="tl-r"></i><i class="tl-y"></i><i class="tl-g"></i></div>
       <div class="project-pill">ruic — common-s</div>
       <div class="tb-right">
-        <span id="phaseStrip" class="chip accent">Phase: idle</span>
-        <span id="bridgeStatus" class="chip dim">Bridge: disconnected</span>
+        <span id="tbRun" class="chip dim">⎇ idle</span>
+        <span id="phaseStrip" class="chip dim">phase: idle</span>
+        <span id="bridgeStatus" class="chip dim">● bridge down</span>
       </div>
     </header>
 
@@ -254,10 +255,11 @@
       </main>
     </div>
 
-    <!-- ── status bar ── -->
+    <!-- ── status bar (mirrors the titlebar state chips — one state, both bars) ── -->
     <footer class="statusbar">
-      <span class="sb-item sb-branch">⎇ commons</span>
-      <span class="sb-item ok" id="sbBridge">● bridge</span>
+      <span class="sb-item sb-branch" id="sbBranch">⎇ idle</span>
+      <span class="sb-item" id="sbBridge">● bridge down</span>
+      <span class="sb-item" id="sbPhase">phase: idle</span>
       <span class="sb-item hide-s">zeak · guard on</span>
       <span class="grow"></span>
       <span class="sb-item mono" id="elapsedTimer">00:00:00</span>
