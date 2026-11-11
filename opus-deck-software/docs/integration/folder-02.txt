@@ -1,0 +1,370 @@
+OPUS//DECK — parts/folder-02 — INTEGRATION CONTRACT
+Part: folder-02 — MODEL REGISTRY & TRANSPORT
+Status: standalone-complete. Builds strict, all tests pass, offline smoke passes.
+
+=====================================================================
+1. WHAT I BUILT
+=====================================================================
+folder-02 implements the model registry and the ONLY LLM-calling transport
+layer of the system. ModelRegistry registers ModelRefs and resolves API keys
+with the mandated order: env var named by apiKeyEnv -> keystores/<model id>
+file -> typed CommonsError (API_KEY_MISSING). Three Transport adapters
+(openai-compatible, anthropic, custom) stream SSE into a uniform
+TransportChunk stream ({text}|{usage}|{done}) with the mandated retry policy:
+exponential backoff 250ms * 2^n, max 4 attempts, only on 429 / 5xx / network
+errors, never on other 4xx, AbortSignal respected immediately. UsageTracker
+keeps per-model and run-wide token sums as clean integers for the dashboard,
+and streamWithUsage records usage automatically while forwarding chunks.
+healthCheck(id) probes each model with a 1-token non-streaming completion and
+returns {ok, latencyMs, detail} without throwing on provider/key failures.
+The folder never decides when a call happens; it only executes complete().
+
+=====================================================================
+2. FILE MAP
+=====================================================================
+parts/folder-02/package.json                         npm package: scripts build/test/smoke/clean, zod dep, TS devDeps
+parts/folder-02/package-lock.json                    lockfile pinning zod 3.x, typescript, @types/node
+parts/folder-02/tsconfig.json                        strict NodeNext config; compiles src/, test/, scripts/ to dist/
+parts/folder-02/.gitignore                           ignores node_modules/, dist/, keystores/* (keeps .gitkeep)
+parts/folder-02/INTEGRATION.txt                      this document
+parts/folder-02/keystores/.gitkeep                   keystore dir placeholder (one key file per model id lives here)
+parts/folder-02/src/index.ts                         public API: all named exports of the folder
+parts/folder-02/src/types.ts                         all shared types/interfaces (ModelRef, Transport, CompletionRequest, TransportChunk, UsageReport, seams)
+parts/folder-02/src/errors.ts                        CommonsError, ErrorCodes, isCommonsError, formatting helpers
+parts/folder-02/src/transport.ts                     Transport re-export + validateCompletionRequest + fetch default/narrowing helpers
+parts/folder-02/src/retry.ts                         DEFAULT_RETRY_POLICY, withRetry, HttpStatusError, classification, abortable sleep
+parts/folder-02/src/sse.ts                           incremental SSE parser (SseParser) + event iterator
+parts/folder-02/src/probe.ts                         probeOnce: 1-token non-streaming health probe helper
+parts/folder-02/src/usage.ts                         UsageTracker + streamWithUsage
+parts/folder-02/src/registry.ts                      ModelRegistry + keystoreFileName
+parts/folder-02/src/stubs.ts                         working stubs for the folder-01 seam (createStubRegistryConfigSource, registryFromConfigSource)
+parts/folder-02/src/adapters/openai-compatible.ts    OpenAiCompatibleTransport (POST {endpoint}/chat/completions, SSE)
+parts/folder-02/src/adapters/anthropic.ts            AnthropicTransport (POST {endpoint}/v1/messages, named SSE events)
+parts/folder-02/src/adapters/custom.ts               CustomTransport (endpoint used verbatim, OpenAI-shaped body, usage optional)
+parts/folder-02/test/helpers.ts                      local HTTP mock server + SSE writers for tests
+parts/folder-02/test/errors.test.ts                  CommonsError/isCommonsError/ErrorCodes tests
+parts/folder-02/test/transport.test.ts               validateCompletionRequest tests
+parts/folder-02/test/sse.test.ts                     SseParser tests
+parts/folder-02/test/retry.test.ts                   retry policy + backoff + abort tests
+parts/folder-02/test/usage.test.ts                   UsageTracker + streamWithUsage tests
+parts/folder-02/test/registry.test.ts                registry, key resolution, adapter selection, healthCheck tests
+parts/folder-02/test/stubs.test.ts                   config-source stub tests
+parts/folder-02/test/openai-compatible.test.ts       openai adapter end-to-end tests against mock server
+parts/folder-02/test/anthropic.test.ts               anthropic adapter end-to-end tests against mock server
+parts/folder-02/test/custom.test.ts                  custom adapter end-to-end tests against mock server
+parts/folder-02/scripts/smoke.ts                     runnable offline smoke demo (npm run smoke)
+parts/folder-02/scripts/run-tests.mjs                portable node:test launcher (Node 20/24, Windows-safe)
+
+=====================================================================
+3. PUBLIC INTERFACE
+=====================================================================
+All of the following are exported by src/index.ts (import from this folder's
+index; nothing else is public). Copy-pasteable signatures:
+
+--- errors -----------------------------------------------------------
+export class CommonsError extends Error {
+  readonly code: string;
+  readonly folder: 'folder-02';
+  readonly detail?: string;
+  constructor(code: string, message: string, options?: { detail?: string; cause?: unknown });
+  toJSON(): { name: string; code: string; folder: string; message: string; detail?: string };
+}
+export function isCommonsError(value: unknown): value is CommonsError;
+export type ErrorCode = 'MODEL_NOT_FOUND' | 'MODEL_ALREADY_REGISTERED' | 'INVALID_MODEL_REF'
+  | 'INVALID_REQUEST' | 'API_KEY_MISSING' | 'KEYSTORE_READ_FAILED' | 'UNSUPPORTED_PROVIDER'
+  | 'TRANSPORT_HTTP' | 'TRANSPORT_NETWORK' | 'TRANSPORT_STREAM' | 'PROVIDER_STREAM_ERROR'
+  | 'REQUEST_ABORTED' | 'RUNTIME_UNSUPPORTED';
+export const ErrorCodes: {
+  readonly MODEL_NOT_FOUND: 'MODEL_NOT_FOUND';
+  readonly MODEL_ALREADY_REGISTERED: 'MODEL_ALREADY_REGISTERED';
+  readonly INVALID_MODEL_REF: 'INVALID_MODEL_REF';
+  readonly INVALID_REQUEST: 'INVALID_REQUEST';
+  readonly API_KEY_MISSING: 'API_KEY_MISSING';
+  readonly KEYSTORE_READ_FAILED: 'KEYSTORE_READ_FAILED';
+  readonly UNSUPPORTED_PROVIDER: 'UNSUPPORTED_PROVIDER';
+  readonly TRANSPORT_HTTP: 'TRANSPORT_HTTP';
+  readonly TRANSPORT_NETWORK: 'TRANSPORT_NETWORK';
+  readonly TRANSPORT_STREAM: 'TRANSPORT_STREAM';
+  readonly PROVIDER_STREAM_ERROR: 'PROVIDER_STREAM_ERROR';
+  readonly REQUEST_ABORTED: 'REQUEST_ABORTED';
+  readonly RUNTIME_UNSUPPORTED: 'RUNTIME_UNSUPPORTED';
+};
+
+--- registry ---------------------------------------------------------
+export class ModelRegistry {
+  constructor(options?: RegistryOptions);            // options: { keystoreDir?, env?, fetch? }
+  register(ref: ModelRef): void;                     // throws INVALID_MODEL_REF | MODEL_ALREADY_REGISTERED
+  get(id: string): ModelRef;                         // defensive copy; throws MODEL_NOT_FOUND
+  list(): ModelRef[];                                // defensive copies, insertion order
+  resolveApiKey(id: string): string;                 // env -> keystores/<id> -> API_KEY_MISSING
+  createTransport(id: string, options?: CreateTransportOptions): Transport; // key resolved eagerly
+  healthCheck(id: string): Promise<HealthCheckResult>; // unknown id throws MODEL_NOT_FOUND; never throws otherwise
+}
+export function keystoreFileName(modelId: string): string; // `/\:*?"<>|` -> `__`
+
+--- transport (THE calling interface) --------------------------------
+export interface Transport {
+  complete(req: CompletionRequest): AsyncIterable<TransportChunk>;
+}
+export interface CompletionRequest {
+  modelId: string;
+  system?: string;
+  messages: { role: 'system' | 'user' | 'assistant'; content: string }[];
+  maxTokens?: number;
+  temperature?: number;
+  signal?: AbortSignal;
+}
+export type TransportChunk =
+  | { type: 'text'; text: string }
+  | { type: 'usage'; inputTokens: number; outputTokens: number }
+  | { type: 'done'; finishReason: string };
+export function validateCompletionRequest(req: unknown): CompletionRequest; // throws INVALID_REQUEST
+
+--- adapters (all implement Transport; also expose probe()) ----------
+export class OpenAiCompatibleTransport implements Transport {
+  constructor(options: AdapterOptions);              // { ref, apiKey, fetch?, retry?, includeUsage? }
+  complete(req: CompletionRequest): AsyncGenerator<TransportChunk, void, undefined>;
+  probe(): Promise<HealthCheckResult>;
+}
+export class AnthropicTransport implements Transport {
+  constructor(options: AdapterOptions);
+  complete(req: CompletionRequest): AsyncGenerator<TransportChunk, void, undefined>;
+  probe(): Promise<HealthCheckResult>;
+}
+export const ANTHROPIC_VERSION: '2023-06-01';
+export const ANTHROPIC_DEFAULT_MAX_TOKENS: 4096;
+export class CustomTransport extends OpenAiCompatibleTransport {
+  constructor(options: AdapterOptions);              // includeUsage defaults false here
+}
+
+--- usage ------------------------------------------------------------
+export class UsageTracker {
+  record(modelId: string, tokens: { inputTokens: number; outputTokens: number }): void;
+  totals(): UsageReport;                             // { perModel: Record<string, ModelUsage>, runWide: ModelUsage }
+  reset(): void;
+}
+export function streamWithUsage(
+  transport: Transport,
+  req: CompletionRequest,
+  tracker: UsageTracker,
+): AsyncGenerator<TransportChunk, void, undefined>;
+
+--- retry ------------------------------------------------------------
+export const DEFAULT_RETRY_POLICY: RetryPolicy;      // frozen { maxAttempts: 4, baseDelayMs: 250, factor: 2 }
+
+--- stubs / config seam (integrator replaces) ------------------------
+export function createStubRegistryConfigSource(
+  overrides?: { models?: ModelRef[]; keystoreDir?: string },
+): RegistryConfigSource;
+export async function registryFromConfigSource(
+  source: RegistryConfigSource,
+  options?: RegistryOptions,
+): Promise<ModelRegistry>;
+
+--- types (all exported from index) ----------------------------------
+export type ModelProviderKind = 'openai-compatible' | 'anthropic' | 'custom';
+export interface ModelRef {
+  id: string; provider: ModelProviderKind; endpoint: string; model: string;
+  apiKeyEnv?: string; maxTokens?: number; temperature?: number; headers?: Record<string, string>;
+}
+export type ChatRole = 'system' | 'user' | 'assistant';
+export interface ChatMessage { role: ChatRole; content: string; }
+export interface HealthCheckResult { ok: boolean; latencyMs: number; detail?: string; }
+export interface HealthProbe { probe(): Promise<HealthCheckResult>; }
+export type EnvSource = Record<string, string | undefined>;
+export interface RetryPolicy { maxAttempts: number; baseDelayMs: number; factor: number; }
+export interface RegistryOptions { keystoreDir?: string; env?: EnvSource; fetch?: FetchLike; }
+export interface AdapterOptions {
+  ref: ModelRef; apiKey: string; fetch?: FetchLike;
+  retry?: Partial<RetryPolicy>; includeUsage?: boolean;
+}
+export interface CreateTransportOptions { retry?: Partial<RetryPolicy>; includeUsage?: boolean; }
+export interface ModelUsage { inputTokens: number; outputTokens: number; totalTokens: number; calls: number; }
+export interface UsageReport { perModel: Record<string, ModelUsage>; runWide: ModelUsage; }
+export interface FetchInit { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal; }
+export interface ReaderLike { read(): Promise<{ done: boolean; value?: Uint8Array }>; releaseLock?(): void; }
+export interface ReadableStreamLike { getReader(): ReaderLike; }
+export interface FetchResponse {
+  ok: boolean; status: number; statusText?: string;
+  body: ReadableStreamLike | null; text(): Promise<string>;
+}
+export type FetchLike = (url: string, init: FetchInit) => Promise<FetchResponse>;
+export interface RegistryConfigSource {
+  load(): Promise<{ models: ModelRef[]; keystoreDir?: string }>;
+}
+
+=====================================================================
+4. EXPECTS FROM OTHERS
+=====================================================================
+ONE dependency, stubbed and working:
+
+From folder-01 (assumed owner of config/COMMONS loading; the FOLDER NUMBER is
+an assumption, the INTERFACE is the contract):
+  interface RegistryConfigSource {
+    load(): Promise<{ models: ModelRef[]; keystoreDir?: string }>;
+  }
+Provide an object with this shape for the real config; then call
+registryFromConfigSource(realSource, { env?, fetch? }) to build a populated
+ModelRegistry, or call source.load() yourself and use registry.register().
+Stub used during standalone build: createStubRegistryConfigSource() in
+src/stubs.ts (returns `{ models: [], keystoreDir: './keystores' }`).
+No other folder's code is imported, referenced, or required.
+
+=====================================================================
+5. PROVIDES TO OTHERS
+=====================================================================
+Anyone who needs to CALL an LLM imports from folder-02:
+- Transport / CompletionRequest / TransportChunk (src/types.ts, re-exported by
+  src/index.ts): the system-wide calling contract. Consumers depend on the
+  Transport interface only, never on adapter classes.
+- ModelRegistry: register ModelRefs, resolve keys, createTransport(id),
+  healthCheck(id), list().
+- UsageTracker + streamWithUsage: wrap any Transport to auto-record token
+  usage for the dashboard (totals()).
+- CommonsError: the shared typed error; err.code is the machine-readable
+  discriminator, err.folder === 'folder-02' identifies origin.
+- One-shot call (folder-02 never schedules calls; callers do):
+    const registry = await registryFromConfigSource(realConfigSource);
+    const transport = registry.createTransport('some-model-id');
+    for await (const chunk of transport.complete({ modelId: 'some-model-id',
+        system: 'you are X', messages: [{ role: 'user', content: '...' }],
+        signal: ac.signal })) { /* text | usage | done */ }
+
+=====================================================================
+6. CONFIG
+=====================================================================
+folder-02 parses no config file of its own. Config arrives through the
+RegistryConfigSource seam (section 4). Runtime knobs:
+
+env vars (not fixed names):
+  <apiKeyEnv>                    type: string   default: none
+      Name is chosen per ModelRef via `apiKeyEnv`; if set and non-empty after
+      trim, it is the API key. Checked BEFORE the keystore file.
+  process.env                    type: EnvSource default: process.env
+      Overridable for tests via RegistryOptions.env.
+
+files/dirs:
+  keystoreDir                    type: string   default: `<cwd>/keystores`
+      One file per model id: `<keystoreDir>/<keystoreFileName(id)>`
+      (path separators and Windows-reserved chars `/\:*?"<>|` replaced with
+      `__`). File content trimmed; empty file = absent. Gitignored.
+
+RegistryOptions keys:
+  keystoreDir  string          default `<cwd>/keystores`  see above
+  env          EnvSource       default process.env         env lookup source
+  fetch        FetchLike       default globalThis.fetch    HTTP seam/tests
+
+AdapterOptions keys (constructor of each adapter):
+  ref           ModelRef        required              model + endpoint + wire name
+  apiKey        string          required              bearer/x-api-key value
+  fetch         FetchLike       default global fetch  HTTP seam/tests
+  retry         Partial<RetryPolicy> default DEFAULT_RETRY_POLICY (test seam; production must omit)
+  includeUsage  boolean         default true (openai-compatible) / false (custom)
+                                request `stream_options.include_usage`
+
+CreateTransportOptions keys: retry, includeUsage (same semantics as above).
+
+ModelRef keys: id (string, unique), provider ('openai-compatible'|'anthropic'|'custom'),
+endpoint (absolute URL), model (wire name), apiKeyEnv? (string), maxTokens?
+(positive int), temperature? (0..2), headers? (Record<string,string>, merged
+last into request headers).
+
+=====================================================================
+7. RUN STANDALONE
+=====================================================================
+Requires Node >= 20 (verified on Node 24.20.0, Windows 10/11 x64).
+From parts/folder-02/:
+
+  npm install
+    -> installs zod, typescript, @types/node (4 packages); exit 0
+
+  npm run build
+    -> `tsc -p tsconfig.json`; no output; exit 0 (strict, no errors)
+
+  npm test
+    -> builds, then runs 56 node:test tests (one or more per public export);
+       expected tail: "tests 56", "pass 56", "fail 0"; exit 0; ~1-2s
+
+  npm run smoke
+    -> offline end-to-end demo against a local mock SSE server (no network,
+       no API keys). Expected output (latency varies):
+         [folder-02 smoke] health ok=true latencyMs=32
+         [folder-02 smoke] text="Hello from mock"
+         [folder-02 smoke] usage={"inputTokens":11,"outputTokens":4,"totalTokens":15,"calls":1}
+         [folder-02 smoke] OK
+       exit 0
+
+=====================================================================
+8. INTEGRATION NOTES
+=====================================================================
+Decisions made where the brief was ambiguous (simplest interpretation):
+a) register(ref) on a duplicate id throws MODEL_ALREADY_REGISTERED (no
+   silent overwrite). get()/list() return defensive copies.
+b) API key resolution is synchronous (readFileSync) — key files are tiny and
+   read at createTransport() time. Empty/whitespace-only values count as
+   absent. File name for ids containing `/`, `\`, `:` etc: see
+   keystoreFileName(). One file per model id, content trimmed.
+c) healthCheck(id) = one non-streaming POST with max_tokens=1 (costs one
+   token) with a 10s internal timeout. Provider/auth failures return
+   { ok: false, latencyMs, detail } (never throw); only unknown ids throw
+   MODEL_NOT_FOUND. Missing key -> ok:false, detail starts 'API_KEY_MISSING:'.
+d) Retry: attempt n+1 delay = 250 * 2^n ms (250, 500, 1000 before attempts
+   2,3,4). No jitter. Once any chunk has been yielded, the attempt is not
+   retried (prevents duplicated text). Provider error events inside a
+   stream (PROVIDER_STREAM_ERROR) are NOT retried (not 429/5xx/network).
+   `retry` option exists only as a test seam; omit in production.
+e) complete() ignores req.modelId for wire selection; the bound
+   ModelRef.model is sent. req.modelId is used only for usage attribution
+   (streamWithUsage) and diagnostics. Adapters are stateless; reuse is safe.
+f) openai-compatible/custom emit exactly one done chunk, last, exactly once.
+   finishReason is the provider-native string; missing -> 'stop'. Usage
+   accepted as {prompt_tokens,completion_tokens} or {input_tokens,output_tokens}.
+   openai-compatible sends stream_options.include_usage=true by default
+   (disable with includeUsage:false for picky gateways); custom never sends it
+   and tolerates zero usage events.
+g) anthropic: req.system and any system-role messages are joined with '\n\n'
+   into the top-level `system` field; at least one non-system message is
+   required (else INVALID_REQUEST). max_tokens defaults to 4096. finishReason
+   = stop_reason verbatim ('end_turn', 'max_tokens', ...); missing -> 'end_turn'.
+   Usage is emitted at message_stop (or stream end) combining input_tokens
+   from message_start and output_tokens from message_delta. Only text_delta
+   content blocks are surfaced (no tool_use handling in this folder).
+h) Malformed SSE JSON throws TRANSPORT_STREAM (fail loudly, no silent data
+   loss). SSE comments/keep-alives are ignored. `[DONE]` is honored for
+   OpenAI-shaped streams and ignored elsewhere.
+i) UsageTracker: every record() increments calls by 1 (streamWithUsage records
+   once per usage chunk; models whose provider emits no usage show calls: 0).
+   Values are floored, non-finite/negative -> 0; totals() returns copies.
+j) zod is used for register()/complete() runtime validation. Unknown object
+   keys are stripped (tolerant for config extras), bad types throw typed
+   CommonsError (INVALID_MODEL_REF / INVALID_REQUEST).
+k) The transport must not be handed an empty apiKey: constructor throws
+   API_KEY_MISSING immediately (fail fast at wiring time).
+l) No files are written by this folder at runtime; keystores/ is only read.
+   The COMMONS directory is not touched by folder-02 at all.
+m) Assumption recorded: folder-01 is assumed to own config/COMMONS loading
+   for the RegistryConfigSource seam (section 4). If another folder owns it,
+   only the stub instance is replaced; the interface is unchanged.
+
+=====================================================================
+9. DO NOT CHANGE
+=====================================================================
+Invariants that must survive integration:
+1. Transport interface exact shape: `complete(req: CompletionRequest):
+   AsyncIterable<TransportChunk>`; TransportChunk is exactly the 3-member
+   union {text}|{usage}|{done}. Never add methods/fields to Transport.
+2. CommonsError exact shape: name 'CommonsError', code: string (values from
+   ErrorCodes), folder === 'folder-02', optional detail. Every failure in
+   this folder is a CommonsError; nothing throws bare Errors to callers.
+3. ModelRegistry API names/signatures as in section 3; resolution order
+   env -> keystores -> API_KEY_MISSING must stay.
+4. Retry constants: baseDelay 250ms * 2^n, maxAttempts 4, retry ONLY 429/5xx/
+   network; never other 4xx; AbortSignal honored immediately (backoff included).
+5. UsageReport numbers are finite non-negative integers; totals() must remain
+   render-ready with zero sanitization on the dashboard side.
+6. Adapters implement Transport and are stateless per complete() call.
+7. Chunk ordering guarantees: text chunks in provider order, usage chunk(s)
+   after text they describe, exactly one final done chunk.
+8. keystoreFileName() mapping for unsafe id characters and the
+   `<keystoreDir>/<sanitized model id>` layout (existing key files must keep
+   working after integration).

@@ -1,0 +1,511 @@
+OPUS//DECK - INTEGRATION CONTRACT - folder-05 (PRESENCE, CLAIMS & LOCKS)
+Machine-readable. Sections 1-9 in the required order. ASCII on purpose.
+
+================================================================================
+1. WHAT I BUILT
+================================================================================
+
+folder-05 implements coordination without communication: a presence table
+(STATE/presence.json), file-level locks stored as rows in STATE/tasks.json, a
+filtered delta subscription, one explicit heartbeat timer, and a conflict queue
+the leader drains instead of letting models block each other.
+`upsert()` writes a worker's heartbeat and `snapshot()` reads the table while
+pruning anything older than `stalenessMs` (default 120000 ms).
+`acquire()` takes a whole path set atomically or nothing at all, returning
+`'granted'` or `{ queuedBehind }` and parking the denial in the conflict queue;
+`release()`, `releaseAll()` and `holdersOf()` manage the same rows.
+`syncSince(modelId, sinceTxnId)` wraps `commons.sync()` and reduces the log to
+three things: deltas about paths this model currently holds, one live digest row
+and one live presence row.
+`startHeartbeat()/stopHeartbeat()` own exactly one timer (default 30000 ms) that
+refreshes only the workers this process registered, while failures of that timer
+are captured and read via `lastHeartbeatError()`.
+Everything is backed by an injectable `CommonsApi`; an in-memory stub is the
+default so the folder builds, runs and tests standalone, and `setCommons()`
+replaces it with the real COMMONS.
+
+================================================================================
+2. FILE MAP
+================================================================================
+
+parts/folder-05/
+  package.json              npm manifest: ESM ("type":"module"), scripts, deps (zod only).
+  package-lock.json         lockfile produced by `npm install`.
+  tsconfig.json             strict tsc config: NodeNext ESM, src/ -> dist/, declaration emit.
+  INTEGRATION.txt           this file; the only authoritative integration document.
+  node_modules/             installed by `npm install` (zod, typescript, @types/node).
+  dist/                     build output (JS + .d.ts + test files); regenerable, do not edit.
+  src/index.ts              public entry point: re-exports of every public symbol.
+  src/types.ts              the whole type contract, incl. CommonsApi (what folder-05 expects).
+  src/errors.ts             CommonsError class + COMMONS_ERROR_CODES list.
+  src/config.ts             env/override resolution: configure(), resetConfig(), getConfig().
+  src/port.ts               setCommons()/getCommons() + callCommons() failure normalizer.
+  src/stubs.ts              createStubCommons(): in-memory CommonsApi used until integration.
+  src/paths.ts              path canonicalization (normalizePath, canonicalPath, normalizePathSet).
+  src/validate.ts           shared argument guards (modelId, timestamps, integers).
+  src/store.ts              validated read/write access to STATE/tasks.json and STATE/presence.json.
+  src/presence.ts           A) upsert()/snapshot() + local-worker registry + prune logic.
+  src/claims.ts             B) acquire()/release()/releaseAll()/holdersOf() over tasks.json rows.
+  src/sync.ts               C) syncSince(): wraps commons.sync() and filters to what matters.
+  src/heartbeat.ts          D) startHeartbeat()/stopHeartbeat()/refreshHeartbeat()/lastHeartbeatError().
+  src/conflicts.ts          E) drainQueue()/queueDepth() + internal enqueue/clear queue ops.
+  src/reset.ts              resetState(): full teardown of folder-05 module state.
+  src/support.ts            TEST-ONLY helpers (not part of the contract; does not match node:test glob).
+  src/api.test.ts           smoke tests: CommonsError, config, port, resetState.
+  src/claims.test.ts        smoke tests: acquire/release/releaseAll/holdersOf/store behavior.
+  src/conflicts.test.ts     smoke tests: drainQueue/queueDepth ordering and de-duplication.
+  src/heartbeat.test.ts     smoke tests: timer lifecycle, refresh, captured failures.
+  src/presence.test.ts      smoke tests: upsert/snapshot/pruning/validation.
+  src/sync.test.ts          smoke tests: syncSince filtering, cursor rule, error paths.
+
+================================================================================
+3. PUBLIC INTERFACE
+================================================================================
+
+Everything exported from `src/index.ts` (import as: `import { ... } from '.../index.js'`).
+
+---- values / functions -------------------------------------------------------
+
+// A) presence
+function upsert(modelId: string, patch: PresencePatch): PresenceEntry;
+function snapshot(): PresenceEntry[];
+
+// B) claims & locks
+function acquire(modelId: string, pathSet: string[]): AcquireResult;
+function release(modelId: string, pathSet: string[]): void;
+function releaseAll(modelId: string): number;              // rows removed (0 if none)
+function holdersOf(path: string): string[];                // ascending, unique
+
+// C) sync
+function syncSince(modelId: string, sinceTxnId: number): Delta[];
+
+// D) heartbeat
+function startHeartbeat(options?: HeartbeatOptions): void; // throws heartbeat_running if live
+function stopHeartbeat(): void;                            // idempotent
+function isHeartbeatRunning(): boolean;
+function refreshHeartbeat(): number;                       // synchronous tick, rows touched
+function lastHeartbeatError(): CommonsError | null;
+
+// E) conflict queue
+function drainQueue(): Conflict[];                         // sorted by task order, queue emptied
+function queueDepth(): number;
+
+// wiring / configuration / lifecycle
+function setCommons(api: CommonsApi | null): void;         // null restores the stub
+function getCommons(): CommonsApi;
+function configure(options: ConfigureOptions): void;
+function resetConfig(): void;
+function getConfig(): CommonsConfig;
+function resetState(): void;                               // stop timer, clear queue+workers, reset config+port
+
+class CommonsError extends Error {
+  readonly code: string;
+  readonly folder: 'folder-05';
+  readonly detail?: string;
+  constructor(code: string, message: string, detail?: string);
+}
+
+const COMMONS_ERROR_CODES: readonly [
+  'config_invalid', 'presence_invalid', 'claims_invalid', 'tasks_invalid',
+  'path_invalid', 'sync_invalid', 'commons_failed', 'heartbeat_running',
+  'heartbeat_failed',
+];
+type CommonsErrorCode = (typeof COMMONS_ERROR_CODES)[number];
+
+---- types (verbatim from src/types.ts) ---------------------------------------
+
+type ModelId = string;
+type TaskId = string;          // e.g. 'T-03'
+type TxnId = number;           // integer, starts at 0
+
+interface PresenceEntry {
+  modelId: ModelId;
+  taskId?: string;             // task the worker is heads-down on
+  file?: string;               // file it is editing, WORKSPACE-relative
+  lastSyncAt: number;          // epoch ms of the last heartbeat
+}
+
+interface PresencePatch {
+  taskId?: string;             // key present => overwrite (undefined clears); absent => keep
+  file?: string;
+  lastSyncAt: number;          // required
+}
+
+type AcquireResult = 'granted' | { queuedBehind: ModelId };
+
+interface Conflict {
+  modelId: ModelId;
+  pathSet: string[];           // canonical, de-duplicated, file-level
+  queuedBehind: ModelId;
+}
+
+interface ClaimRow {           // this is a row of STATE/tasks.json
+  kind: 'claim';
+  claimId: string;             // `claim:<modelId>:<path>`
+  modelId: ModelId;
+  path: string;
+  taskId?: string;
+  createdAt: number;
+}
+
+interface TaskRow {            // any non-claim row; foreign, never mutated
+  kind?: 'task';
+  taskId?: string;
+  order?: number;
+  assignee?: string;
+  status?: string;
+  title?: string;
+  [key: string]: unknown;
+}
+
+type TaskRecord = TaskRow | ClaimRow;
+
+interface Delta {
+  txnId: TxnId;
+  kind: string;                // open string; known: digest|presence|task|claim|file|note
+  path?: string;
+  taskId?: TaskId;
+  modelId?: ModelId;
+  value?: unknown;             // digest => string, presence => PresenceEntry[]
+  at?: number;                 // epoch ms
+}
+
+type DeltaKind = 'digest' | 'presence' | 'task' | 'claim' | 'file' | 'note';
+
+interface SyncResult {
+  head: TxnId;                 // >= every deltas[i].txnId
+  deltas: Delta[];
+}
+
+interface CommonsApi {         // <== the contract folder-05 stubs against (see section 4)
+  sync(): SyncResult;
+  readTasks(): TaskRecord[];
+  writeTasks(rows: TaskRecord[]): void;
+  readPresence(): PresenceEntry[];
+  writePresence(entries: PresenceEntry[]): void;
+  readDigest(): string;
+}
+
+interface HeartbeatOptions { intervalMs?: number; }
+
+interface ConfigureOptions { stalenessMs?: number; heartbeatIntervalMs?: number; }
+
+interface CommonsConfig { stalenessMs: number; heartbeatIntervalMs: number; }
+
+---- module-internal exports (available, NOT part of the contract) ------------
+
+presence.ts : findEntry(modelId): PresenceEntry | undefined
+              localWorkerIds(): string[]
+              refreshLocalWorkers(now: number): number
+              resetPresenceState(): void
+conflicts.ts: enqueueConflict(modelId, pathSet, queuedBehind): void
+              clearQueuedConflict(modelId, pathSet): void
+              resetConflicts(): void
+heartbeat.ts: resetHeartbeatState(): void
+config.ts    : ENV_STALENESS_MS = 'COMMONS_PRESENCE_STALENESS_MS'
+               ENV_HEARTBEAT_MS = 'COMMONS_HEARTBEAT_INTERVAL_MS'
+port.ts      : callCommons<T>(what: string, run: () => T): T
+store.ts     : isClaimRow, readClaimRows, readTaskRows, writeTaskRows,
+               readPresenceStore, writePresenceStore, assertPresenceEntry
+paths.ts     : normalizePath, canonicalPath, normalizePathSet, preview
+validate.ts  : requireModelId, requireTimestamp, requireNonNegativeInt, requirePositiveInt
+stubs.ts     : createStubCommons(options?): StubCommons, type StubCommons, type StubCommonsOptions
+support.ts   : isolate, installStub, assertCommonsError, waitFor   (TEST-ONLY)
+
+================================================================================
+4. EXPECTS FROM OTHERS
+================================================================================
+
+EXPECTED PROVIDER: folder-01 (the COMMONS core that owns the storage files and
+the delta log). Folder number is a best guess - I cannot see other folders - the
+binding contract is the interface, not the number (see note 8.1).
+
+The exact interface I stubbed (identical to `CommonsApi` in my src/types.ts,
+implemented by `createStubCommons()` in my src/stubs.ts):
+
+  interface CommonsApi {
+    /** Flush/advance the delta log; head >= every returned delta.txnId. */
+    sync(): { head: number; deltas: Delta[] };
+    /** Every row of STATE/tasks.json as a flat JSON array. */
+    readTasks(): TaskRecord[];
+    /** Atomically replace STATE/tasks.json. */
+    writeTasks(rows: TaskRecord[]): void;
+    /** Every entry of STATE/presence.json as a flat JSON array. */
+    readPresence(): PresenceEntry[];
+    /** Atomically replace STATE/presence.json. */
+    writePresence(entries: PresenceEntry[]): void;
+    /** Current STATE/digest.md content. */
+    readDigest(): string;
+  }
+
+  interface Delta {
+    txnId: number; kind: string; path?: string; taskId?: string;
+    modelId?: ModelId; value?: unknown; at?: number;
+  }
+
+Wire-up required of the integrator (one line, at startup, before any call):
+
+  import { setCommons } from '<folder-05>/src/index.js';   // or dist/index.js
+  setCommons(realCommons);                                 // realCommons: CommonsApi
+
+Data shape expectations (validated with zod on read; violations throw):
+  - STATE/presence.json  = JSON array of PresenceEntry
+                           `{"modelId":"eng-1","taskId":"T-01","file":"a.ts","lastSyncAt":1712345678901}`
+                           (taskId/file optional; lastSyncAt epoch ms >= 0)
+  - STATE/tasks.json     = JSON array of row objects. Rows with `"kind":"claim"`
+                           are folder-05 locks and must match ClaimRow exactly;
+                           every other row is treated as foreign and passed
+                           through untouched. If the real file wraps rows in an
+                           object (`{"tasks":[...]}`), flatten/expand it inside
+                           the CommonsApi adapter, not inside folder-05.
+  - STATE/digest.md       = arbitrary string (may be empty).
+
+Behavioral expectations of the provider:
+  - `sync()` must be callable repeatedly and must not lose transactions between
+    calls (folder-05 re-filters by `txnId > sinceTxnId` itself, so a
+    full-log-returning or window-returning implementation both work).
+  - `writeTasks()`/`writePresence()` must be atomic (temp file + rename) so a
+    reader never observes a half-written file.
+  - Transactions are integers starting at 0 and must never be renumbered.
+
+================================================================================
+5. PROVIDES TO OTHERS
+================================================================================
+
+Import everything from `src/index.ts` (public) - see section 3 for signatures.
+
+FOR THE LEADER (folder-06):
+  drainQueue(): Conflict[]          the denied requests, ordered by task order
+                                    (T-03 before T-07). Re-route this work
+                                    instead of letting models wait on each other.
+                                    Empties the queue; call it on your own cadence.
+  queueDepth(): number              cheap "is anyone blocked?" signal for a tick.
+  holdersOf(path) / releaseAll(id)  inspect locks; `releaseAll(deadModelId)` is how
+                                    you reclaim the locks of a worker you pruned
+                                    from presence (claims have no TTL - see 8.9).
+  snapshot(): PresenceEntry[]       who is alive, on what task/file.
+
+FOR EVERY WORKER / ENGINEERING MODEL:
+  acquire(paths) / release(paths)   file-level mutual exclusion over WORKSPACE.
+  syncSince(modelId, cursor)        bounded catch-up; see the cursor rule in 8.4.
+  upsert(modelId, { taskId, file, lastSyncAt: Date.now() })
+                                    announce/refresh where you are; do this when
+                                    you start a task and whenever you switch file.
+  startHeartbeat() / stopHeartbeat() keep your presence warm without polling by hand.
+
+FOR THE SECURITY GATE (any auditing model):
+  holdersOf() + snapshot()          read-only view: who touches which file, and
+                                    whether it is claimed while audited.
+
+FOR THE INTEGRATOR:
+  setCommons(api) / configure(opts) / resetState() and every type in section 3.
+
+Do NOT import from `src/stubs.ts`, `src/support.ts` or any `../folder-XX/` path.
+Never write to STATE/tasks.json or STATE/presence.json directly - go through
+`setCommons()` so folder-05 and the COMMONS core share one store.
+
+================================================================================
+6. CONFIG
+================================================================================
+
+Environment variables (read on every `getConfig()` call, i.e. hot-settable):
+
+  name                           type              default     purpose
+  ------------------------------ ----------------- ----------- -------------------------------------------
+  COMMONS_PRESENCE_STALENESS_MS  positive integer  120000      presence TTL in ms; older entries are
+                                                               pruned by snapshot() (and persisted).
+  COMMONS_HEARTBEAT_INTERVAL_MS  positive integer  30000       heartbeat tick period in ms.
+  Invalid values (non-integer, <= 0) throw CommonsError('config_invalid').
+
+Programmatic keys (highest precedence: configure() > env var > default):
+
+  key                  type      default   purpose
+  --------------------- --------- --------- ---------------------------------------------
+  stalenessMs           number    120000    same as COMMONS_PRESENCE_STALENESS_MS.
+  heartbeatIntervalMs   number    30000     same as COMMONS_HEARTBEAT_INTERVAL_MS.
+
+  configure(options)   merges; keys omitted or `undefined` are left untouched.
+  resetConfig()        drops every override (env/default apply again).
+
+Per-call option:
+
+  startHeartbeat({ intervalMs?: number })   overrides both of the above for that run;
+                                            must be a positive integer (else config_invalid).
+
+Runtime handle (not configuration, but set once at startup):
+
+  setCommons(api: CommonsApi | null)        default: the in-memory stub.
+
+No other env vars, no config files, no network endpoints are read by folder-05.
+
+================================================================================
+7. RUN STANDALONE
+================================================================================
+
+Prerequisites: Node 20+ (verified on Node v24.20.0, npm 11.19.0), network for
+the first `npm install`.
+
+  cd parts/folder-05
+  npm install
+
+  npm run build
+    -> exits 0, no stdout beyond the npm script banner.
+       emits dist/*.js and dist/*.d.ts (strict tsc, no `any`).
+
+  npm test
+    -> runs tsc first, then node --test over the six test files.
+       exits 0 and the tail looks like:
+
+         ...
+         ℹ tests 44
+         ℹ suites 0
+         ℹ pass 44
+         ℹ fail 0
+         ℹ cancelled 0
+         ℹ skipped 0
+         ℹ todo 0
+         ℹ duration_ms <n>
+
+       There is at least one smoke test per public export (44 tests total at
+       the time of writing; the count grows if you add tests).
+
+  Direct use without integration (stub commons):
+
+         node -e "import('./dist/index.js').then(m => {
+           const now = Date.now();
+           m.upsert('eng-1', { taskId: 'T-01', file: 'a.ts', lastSyncAt: now });
+           console.log(m.snapshot());
+           console.log(m.acquire('eng-1', ['src/a.ts']));
+           console.log(m.holdersOf('src/a.ts'));
+           m.stopHeartbeat();
+         })"
+
+  NOTE: `node --test <directory>` does NOT enumerate files on Node 24, so the
+  `test` script lists the six compiled test files explicitly. If you add
+  `src/<name>.test.ts`, append `dist/<name>.test.js` to that script.
+
+================================================================================
+8. INTEGRATION NOTES
+================================================================================
+
+8.1  Folder number guess. I expect the COMMONS storage/sync core in folder-01,
+     but I cannot see other folders; the real contract is `CommonsApi`
+     (section 4). If it lives elsewhere, nothing changes except who calls
+     `setCommons()`. I deliberately did not import anything from ../folder-XX.
+
+8.2  Module format. ESM: package.json has `"type":"module"`, tsconfig uses
+     `module/moduleResolution: NodeNext`, and every relative import ends in
+     `.js`. If the merged project is CommonJS, change `type`/`module`/
+     `moduleResolution` to `CommonJS`/`NodeNext` and strip the `.js` suffixes;
+     the only external import is `zod`.
+
+8.3  Dependencies. Runtime: `zod` only (row/entry validation on every store
+     read). Dev: `typescript`, `@types/node`. No frameworks.
+
+8.4  syncSince contract (decided, simplest reading of the spec):
+     - filters `delta.txnId > sinceTxnId`, so the provider may return the whole
+       log or just a window;
+     - keeps only deltas whose canonical `path` is claimed by `modelId`, plus
+       exactly two synthesized rows: current digest and current presence table;
+     - if nothing is new it returns `[]` (cheapest possible answer);
+     - cursor rule: `cursor = Math.max(0, ...deltas.map(d => d.txnId))` is the
+       new head; when the array is non-empty that max equals `SyncResult.head`.
+     Deltas about the model's own *tasks* (kind 'task') are NOT included unless
+     they name a claimed path - the spec lists only paths + digest + presence.
+
+8.5  Conflict ordering. The queue entry's order key is the *queued* model's
+     current taskId, read from presence at enqueue time. If STATE/tasks.json has
+     numeric `order` for both tasks, that wins; otherwise taskId compares
+     lexicographically (so T-03 < T-07 exactly as specified); models with no
+     known task drain last, ties broken FIFO. `queuedBehind` is the smallest
+     modelId among the foreign holders of the first blocked path (deterministic).
+
+8.6  Queue hygiene (added, not in the brief): identical (modelId, pathSet)
+     denials de-duplicate to one entry, and a later *grant* of exactly that path
+     set removes it, so the leader never re-routes work that already unblocked.
+     `drainQueue()` empties the queue; `queueDepth()` observes it.
+
+8.7  Presence pruning vs heartbeat. `snapshot()` prunes relative to `Date.now()`
+     on every read and persists the prune. The heartbeat only refreshes workers
+     this process registered via `upsert()` (module-level local registry), so a
+     worker whose process died still goes stale and is pruned instead of being
+     kept alive by its peers. Multi-process COMMONS: each process warms only its
+     own rows.
+
+8.8  Presence patch semantics. A key *present* in the patch overwrites (an
+     explicit `undefined` clears the field); an *absent* key keeps the previous
+     value. `lastSyncAt` is required and must be a finite epoch-ms >= 0.
+
+8.9  Claims never expire. There is no TTL on a lock row: a crashed worker's
+     claims stay until someone calls `release(modelId, paths)` or
+     `releaseAll(modelId)`. Recommended leader policy: when a worker is pruned
+     from presence for > stalenessMs, call `releaseAll(worker)` and re-queue its
+     task. Locks are re-entrant/idempotent per model (re-acquiring creates no
+     duplicate row), and `acquire()` is all-or-nothing (no partial grants).
+
+8.10 Concurrency gap (decide this during integration). `acquire()` does a
+     read-modify-write through `CommonsApi`; it is safe when there is one writer
+     process or when the provider serializes writes, but two processes calling
+     `acquire()` on overlapping paths in the same millisecond can both win
+     (last writer wins). Recommended fix in the COMMONS core: perform the
+     read-modify-write under an exclusive file lock (or route every acquire
+     through the leader). folder-05 does not open any file itself by design.
+
+8.11 Error policy. Everything folder-05 raises itself is a `CommonsError` with
+     `folder === 'folder-05'` and a code from `COMMONS_ERROR_CODES`. Failures
+     thrown by the injected CommonsApi are wrapped as `commons_failed` UNLESS
+     they are already a `CommonsError`, in which case they are rethrown
+     unchanged, preserving their original `code`/`folder` (provenance).
+     `heartbeat_failed` is a defensive fallback for any unexpected non-port
+     error inside the timer tick; in practice timer failures arrive as
+     `commons_failed` and are stored verbatim for `lastHeartbeatError()`.
+
+8.12 Deliberate scope limits. No line-range locks, no directory-prefix locks,
+     no lock upgrade/downgrade, no wait/notify (models never block - they get
+     `{queuedBehind}` and a queue entry). Paths are canonicalized (backslashes
+     to `/`, `.`/`..` collapsed, trailing slash stripped); empty/`.`/`/` are
+     rejected with `path_invalid`. Claim rows use `kind:'claim'` so foreign task
+     rows are never touched; claimId is deterministic (`claim:<modelId>:<path>`).
+
+8.13 `resetState()` also resets the COMMONS handle to the stub. Tests rely on
+     this; production shutdown code should call it last.
+
+================================================================================
+9. DO NOT CHANGE
+================================================================================
+
+9.1  `CommonsError` shape: `code: string`, `folder: 'folder-05'`, `detail?: string`,
+     `extends Error`. Every failure leaving folder-05 must remain a CommonsError.
+
+9.2  Locks live ONLY as `{kind:'claim'}` rows in STATE/tasks.json. No second
+     store, no side file, no cache, no in-memory-only lock. `releaseAll()` must
+     keep returning the removed row count.
+
+9.3  File-level granularity only. Never add line-range or directory-prefix
+     semantics: two paths collide iff their canonical forms are equal.
+
+9.4  Presence lives ONLY in STATE/presence.json, keyed by `modelId`, with
+     `lastSyncAt` in epoch milliseconds, and is pruned on read at `stalenessMs`
+     (default 120000) with the pruned table written back.
+
+9.5  Public names and signatures in section 3 are the integration surface:
+     `upsert, snapshot, acquire, release, releaseAll, holdersOf, syncSince,
+     startHeartbeat, stopHeartbeat, isHeartbeatRunning, refreshHeartbeat,
+     lastHeartbeatError, drainQueue, queueDepth, setCommons, getCommons,
+     configure, resetConfig, getConfig, resetState, CommonsError,
+     COMMONS_ERROR_CODES`. Renaming any of them breaks folder-06 (leader) and
+     the worker loop.
+
+9.6  `syncSince(): Delta[]` keeps its type and the cursor rule of 8.4 (max txnId
+     is the new head; `[]` means nothing new).
+
+9.7  Foreign rows in STATE/tasks.json are never mutated - only rows with
+     `kind:'claim'` may be added or removed.
+
+9.8  Exactly one heartbeat timer per process, started and stopped explicitly;
+     the timer stays `unref()`d so it cannot keep the host alive, and its
+     failures are captured rather than thrown into the event loop.
+
+9.9  Technical invariants of the build: TypeScript `strict` with no emitted
+     `any`, kebab-case file names, ESM relative imports with `.js` extensions,
+     node:test for tests, and zero runtime dependencies beyond `zod`.

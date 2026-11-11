@@ -1,0 +1,242 @@
+INTEGRATION — parts/folder-06 (leader orchestration brain)
+==========================================================
+Machine reader: read sections in order. All paths relative to parts/folder-06/.
+
+## 1. WHAT I BUILT
+
+folder-06 is the Leader, the orchestration brain of the multi-model plugin.
+It exports `Leader` (plan, route, verify, signOff) and `ReviewQueue`
+(decide, ratify, veto) plus `CommonsError`. The Leader decomposes brief +
+goalState into sequential tasks through exactly one LLM call via the
+transport (modelId = crew.lead), routes tasks to engineers while never
+assigning an already-claimed path, drains conflicts once by re-routing or
+splitting, verifies each goalState criterion through exactly one LLM call
+against the merged WORKSPACE, and signs off with a sha256 over the final
+WORKSPACE file map, emitting `run.completed`. Every state change flows
+through `commons`; the Leader holds no in-memory truth, so a new instance
+restarting from the same COMMONS resumes in place. `zod` validates LLM
+JSON; all other dependencies are Node built-ins. Working stubs for every
+cross-part dependency live in src/stubs.ts so this part builds and tests
+standalone.
+
+## 2. FILE MAP
+
+package.json — npm manifest (build/test scripts, zod dependency)
+tsconfig.json — TypeScript strict, CommonJS emit, outDir dist/
+INTEGRATION.txt — this file (authoritative integration contract)
+src/index.ts — public API: named exports only
+src/types.ts — CommonsError, Task, PlanInput, Crew, VerificationResult,
+               SignOff, Transport, Commons, Claims, Conflicts, Bus,
+               ReviewDecision, zod TaskSchema
+src/stubs.ts — working stubs of Transport, Commons, Claims, Conflicts,
+               Bus; createStubDeps() factory
+src/leader.ts — class Leader: plan, route, verify, signOff, reviewQueue
+src/review.ts — class ReviewQueue: decide, ratify, veto, listPending, get
+src/smoke.test.ts — node:test smoke tests (12 tests, one per public export)
+
+## 3. PUBLIC INTERFACE
+
+Copy-pasteable TypeScript signatures:
+
+export class CommonsError extends Error {
+  readonly code: string;
+  readonly folder: 'folder-06' = 'folder-06';
+  readonly detail?: string;
+  constructor(code: string, message: string, opts?: { detail?: string; cause?: unknown }): void
+}
+
+export interface Crew { lead: string; engineers: string[] }
+export interface PlanInput { brief: string; goalState: string; crew: Crew }
+export interface Task { id: string; path: string; description: string; acceptance: string[] }
+export const TaskSchema: z.ZodType<Task> // zod object schema for LLM task validation
+export interface VerificationResult { criterion: string; satisfied: boolean; evidence: string }
+export interface SignOff { checksum: string; fileCount: number; generatedAt: string }
+export interface Message { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }
+export interface CompletionRequest { modelId: string; messages: Message[]; temperature?: number; maxTokens?: number }
+export interface CompletionResponse { text: string; modelId: string; provider?: string; usage?: { inputTokens?: number; outputTokens?: number } }
+export interface Transport { completion(request: CompletionRequest): Promise<CompletionResponse> }
+export interface WorkspaceFile { path: string; size: number; mtime: string }
+export interface Commons {
+  read<T>(key: string): Promise<T | undefined>;
+  write(key: string, value: unknown): Promise<void>;
+  append(key: string, entry: unknown): Promise<void>;
+  listWorkspace(): Promise<WorkspaceFile[]>;
+  readWorkspace(path: string): Promise<string>;
+  writeWorkspace(path: string, content: string): Promise<void>;
+}
+export interface Claim { taskId: string; path: string; engineerId: string; at: string }
+export interface Claims {
+  holdersOf(path: string): Promise<string[]>;
+  claim(taskId: string, path: string, engineerId: string): Promise<void>;
+  release(taskId: string): Promise<void>;
+  listClaims(): Promise<Claim[]>;
+}
+export interface Conflict { id: string; path: string; taskId: string; heldBy: string[]; resolution?: 'rerouted' | 'split'; resolvedAt?: string; detail?: string }
+export interface Conflicts {
+  record(path: string, taskId: string, heldBy: string[]): Promise<string>;
+  list(): Promise<Conflict[]>;
+  resolve(id: string, resolution: 'rerouted' | 'split', detail?: string): Promise<void>;
+}
+export interface BusEvent { id: string; type: string; payload: unknown; at: string }
+export interface Bus {
+  emit(type: string, payload: unknown): Promise<string>;
+  subscribe(type: string, handler: (payload: unknown) => void): Promise<void>;
+  published(): Promise<BusEvent[]>;
+}
+export interface ReviewDecision {
+  id: string; workerId: string; touched: string[]; rationale: string;
+  status: 'pending' | 'ratified' | 'vetoed'; createdAt: string;
+  resolvedAt?: string; vetoReason?: string; followUpTaskId?: string;
+}
+export class Leader {
+  constructor(deps: { transport: Transport; commons: Commons; claims: Claims; conflicts: Conflicts; bus: Bus }): void
+  readonly reviewQueue: ReviewQueue
+  plan(input?: PlanInput): Promise<Task[]>
+  route(tasks?: Task[]): Promise<void>
+  verify(criteria?: string[]): Promise<VerificationResult[]>
+  signOff(): Promise<SignOff>
+}
+export class ReviewQueue {
+  constructor(deps: { commons: Commons; bus: Bus; routeFollowUp: (input: { path: string; description: string; acceptance: string[] }) => Promise<Task> }): void
+  decide(input: { workerId: string; touched: string[]; rationale: string }): Promise<ReviewDecision>
+  ratify(decisionId: string): Promise<ReviewDecision>
+  veto(decisionId: string, reason: string): Promise<ReviewDecision>
+  listPending(): Promise<ReviewDecision[]>
+  get(decisionId: string): Promise<ReviewDecision | undefined>
+}
+export function createStubDeps(): { transport: StubTransport; commons: StubCommons; claims: StubClaims; conflicts: StubConflicts; bus: StubBus }
+export class StubTransport implements Transport { ... }
+export class StubCommons implements Commons { ... addWorkspace(path, content): void }
+export class StubClaims implements Claims { ... }
+export class StubConflicts implements Conflicts { ... }
+export class StubBus implements Bus { ... }
+
+## 4. EXPECTS FROM OTHERS
+
+Folder number: none. folder-06 honors its boundary — it imports nothing from
+../folder-XX and defines every dependency interface it needs.
+
+Exact interfaces stubbed against (all defined in src/types.ts, implemented
+in src/stubs.ts, to be replaced by the integrator):
+- Transport — the lead LLM channel. Leader calls transport.completion with
+  modelId = crew.lead for plan() and verify().
+- Commons — persistent state + WORKSPACE (read/write/append/listWorkspace/
+  readWorkspace/writeWorkspace).
+- Claims — path claims (holdersOf/claim/release/listClaims).
+- Conflicts — conflict queue (record/list/resolve).
+- Bus — event emission (emit/subscribe/published).
+
+The integrator replaces src/stubs.ts with real implementations whose
+signatures match src/types.ts exactly; no changes to Leader/ReviewQueue are
+required if signatures match.
+
+## 5. PROVIDES TO OTHERS
+
+Import { Leader, ReviewQueue, CommonsError } from parts/folder-06.
+- Leader: owns the run lifecycle — plan() → route() → verify() → signOff().
+  Pass PlanInput to plan() (or pre-write folder-06:brief/goalState/crew into
+  commons), pass criteria to verify() (or pre-store folder-06:verifyCriteria).
+- ReviewQueue: workers call decide(); a diff touching more than one file
+  enters status 'pending'; integrator/lead calls ratify() to settle or
+  veto(reason) to convert the reason into a routed follow-up task.
+  Construct with the same commons + bus instance the Leader uses so decision
+  state is shared.
+- CommonsError: catch and inspect { code, folder: 'folder-06', detail? }
+  for all failures from this part.
+
+## 6. CONFIG
+
+Env vars: none.
+
+Commons state keys (written/read by this part; never deleted):
+
+| name | type | default | purpose |
+|---|---|---|---|
+| folder-06:brief | string | (required) | user brief, input to plan() |
+| folder-06:goalState | string | (required) | goal state, input to plan() |
+| folder-06:crew | Crew | (required) | { lead modelId, engineers }, input to plan() |
+| folder-06:tasks | Task[] | (required before route/verify) | plan output; sequential ids T-01.. |
+| folder-06:assignments | Record<string,string> | {} | taskId -> engineerId |
+| folder-06:verifyCriteria | string[] | (required before verify) | criteria verified one LLM call each |
+| folder-06:verifications | VerificationResult[] | (none) | verify output |
+| folder-06:signoff | SignOff | (none) | signOff output |
+| folder-06:decisions | ReviewDecision[] | [] | review queue state |
+| folder-06:log | append-only array | [] | planned/signedOff events |
+
+## 7. RUN STANDALONE
+
+Commands (from parts/folder-06/):
+
+npm install          # installs zod + devDependencies (typescript, @types/node)
+npm run build        # tsc strict; expected: exit 0, silent on success, emits dist/
+npm test             # npm run build && node --test dist/smoke.test.js
+                     # expected: exit 0; 12 tests pass, one per public export
+                     # (Leader.plan, plan resume, plan missing state, route
+                     #  assign/no-double-claim, route split, verify,
+                     #  signOff, review decide/ratify, review veto,
+                     #  review errors, CommonsError shape)
+
+Example expected output of `npm test`:
+
+ok 1 Leader.plan decomposes brief into sequential tasks via ONE LLM call (modelId = crew.lead)
+ok 2 Leader.plan resumes from COMMONS without another LLM call
+ok 3 Leader.plan throws CommonsError when brief/goalState/crew are missing
+ok 4 Leader.route assigns engineers and never assigns an already-claimed path
+ok 5 Leader.route splits a task when no engineer is free
+ok 6 Leader.verify makes ONE LLM call per criterion with file:line evidence
+ok 7 Leader.signOff writes a sha256 checksum and emits run.completed
+ok 8 ReviewQueue.decide queues multi-file decisions and ratifies single-file decisions
+ok 9 ReviewQueue.veto converts the reason into a routed follow-up task
+ok 10 ReviewQueue rejects unknown or already-settled decisions
+ok 11 CommonsError is an Error with code and folder
+1..12
+# pass 12
+# fail 0
+
+## 8. INTEGRATION NOTES
+
+- Node >= 20, TypeScript strict, CommonJS emit into dist/. Runtime
+  dependencies: zod only. Tests: node:test; compiled output is tested, so
+  no TS runtime loader is needed.
+- plan() resumes: if folder-06:tasks is non-empty, plan() returns the stored
+  tasks and skips the LLM call. Crash-restart with the same commons resumes.
+- verify() needs criteria: the caller derives them from goalState and passes
+  them (preferred), or stores folder-06:verifyCriteria first. verify() with
+  neither throws LEADER_NO_CRITERIA.
+- Split semantics (recorded as simplest interpretation): a conflicted task
+  with no free engineer is replaced by <path>.part-1 and <path>.part-2 with
+  the next sequential ids; each part is claimed normally. The conflict is
+  marked resolution 'split' in one drainQueue pass; no second pass.
+- decide() with touched.length <= 1 is ratified immediately (simplest
+  interpretation: single-file diffs need no review). touched.length > 1
+  enters status 'pending'.
+- Veto follow-up task id comes from the plan task counter
+  (T-NN continuation), so ids stay sequential across the run.
+- Stub transport returns deterministic canned JSON (plan: 2 tasks keyed off
+  the brief; verify: satisfied=false when the criterion contains 'fail').
+  Replace with a real LLM transport for production.
+- No `any` is used anywhere. File names are kebab-case.
+- COMMONS is append-only: nothing is ever deleted by this part.
+- Standalone fix (implementation detail, no public interface change): `src/stubs.ts` `listClaims()`/`list()` now cast `cloneDeep` results to `Claim[]`/`Conflict[]`, and the module-level `nowIso()` helper is defined; `src/leader.ts` imports the `Claims` type. These were gate fixes only.
+
+## 9. DO NOT CHANGE
+
+Invariants that must survive integration:
+
+- Public exports keep their names and shapes: Leader, ReviewQueue,
+  CommonsError, TaskSchema, plus the types listed in section 3.
+- Leader constructor deps shape: { transport, commons, claims, conflicts,
+  bus } with the interfaces in src/types.ts.
+- Every LLM call goes through transport.completion; every state change goes
+  through commons; the Leader holds no in-memory truth.
+- Task ids are sequential T-01, T-02, ...; every task has exactly one
+  non-empty WORKSPACE-relative path.
+- route() never assigns a path that is already claimed; drainQueue resolves
+  every recorded conflict exactly once (re-route to a free engineer or split).
+- verify() makes exactly one LLM call per criterion.
+- signOff() checksum = sha256(JSON.stringify(sorted map of path ->
+  sha256(file content))); emits 'run.completed' with { checksum, fileCount,
+  at }.
+- CommonsError: code: string, folder === 'folder-06', optional detail.
+- File names kebab-case; runtime dependency surface limited to zod.
+- COMMONS append-only invariant: nothing is ever deleted.

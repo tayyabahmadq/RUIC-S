@@ -1,0 +1,141 @@
+1. WHAT I BUILT
+folder-07 implements the engineering crew runner: budgeted five-slot prompt assembly, a per-engineer worker loop that claims tasks, acquires locks, streams model output, parses the write-intent wire format, writes through COMMONS as the model author, releases locks, and emits completion/failure events; a runCrew pool that shares one task queue across N workers and retires a worker after 3 consecutive failures; and a per-model 12-entry LRU working set exposed for the compactor. All cross-part dependencies are duck-typed and replaced in src/stubs.ts, so the package runs standalone with Node's built-in test runner and zero runtime dependencies except zod. Every failure throws CommonsError with folder "folder-07". The completion/failure contract is exposed as bus events named task.completed, run.failed, compaction.requested, compaction.done, and worker.retired (plus engineer.retired and crew.worker.retired aliases).
+
+2. FILE MAP
+package.json - package metadata, scripts, zod/typescript dependencies
+tsconfig.json - strict TypeScript build configuration
+INTEGRATION.txt - machine-readable integration contract
+src/types.ts - shared types, wire format schema, dependency interfaces, CommonsError
+src/stubs.ts - working stubs for bus, commons, transport, locks, queue, working-set store, and normalizers
+src/assemble-prompt.ts - five-slot budgeted prompt builder and budget configuration
+src/lru.ts - per-model read-range LRU working set and helpers
+src/worker.ts - EngineerWorker claim/lock/run/parse/write loop
+src/pool.ts - runCrew shared-queue worker pool with retirement
+src/index.ts - public API barrel
+test/smoke.test.ts - smoke tests for public exports
+
+3. PUBLIC INTERFACE
+Exports re-export all types from src/types.ts, especially:
+CommonsError, FolderId, Task, PresenceEntry, WorkingSetEntry, WriteIntent, WriteIntentSchema, BusHandler, EventBus, CommonsWriteArgs, CommonsClient, TransportClient, LockClient, TaskQueue, WorkingSetStore, EngineerRef, CrewDependencies, CrewWorkerResult, CrewResult, PromptArgs, BuildPromptArgs.
+
+Runtime values and signatures:
+export class CommonsError extends Error { code: string; folder: 'folder-07'; detail?: string; constructor(code: string, message: string, detail?: string); }
+
+export interface BuildPromptArgs { task: Task; brief: string; digest: string; presence: readonly PresenceEntry[]; workingSet: readonly WorkingSetEntry[]; }
+export function buildPrompt(args: BuildPromptArgs): string;
+export const assemblePrompt: (args: BuildPromptArgs) => string;
+export function getPromptTokenBudget(): number;
+export function setPromptTokenBudget(value: number): void;
+
+export class EngineerWorker {
+  constructor(modelIdOrRef: string | EngineerRef, deps?: CrewDependencies);
+  readonly modelId: string;
+  readonly completedTaskIds: string[];
+  readonly failedTaskIds: string[];
+  get isRetired(): boolean;
+  get failureCount(): number;
+  run(queue?: TaskQueue, tasks?: readonly Task[]): Promise<{ modelId: string; completedTaskIds: readonly string[]; failedTaskIds: readonly string[]; retired: boolean; consecutiveFailures: number }>;
+  processTask(task: Task, queue: TaskQueue): Promise<void>;
+  claimNext(queue: TaskQueue): Promise<Task | null>;
+  get isRetired(): boolean;
+  get failureCount(): number;
+}
+export function createEngineerWorker(modelIdOrRef: string | EngineerRef, deps?: CrewDependencies): EngineerWorker;
+
+export async function runCrew(engineerRefs: readonly (string | EngineerRef)[], tasks: readonly Task[], optionsOrDependencies?: CrewDependencies | { dependencies?: CrewDependencies; concurrency?: number }): Promise<CrewResult>;
+
+export class WorkingSetLru {
+  constructor(capacity?: number); // default 12
+  readonly capacity: number;
+  record(modelId: string, entry: WorkingSetEntry): void;
+  recordRange(modelId: string, path: string, startLine: number, endLine: number, content?: string): void;
+  currentEntries(modelId: string): WorkingSetEntry[];
+  size(modelId: string): number;
+  clear(modelId?: string): void;
+}
+export const defaultWorkingSetLru: WorkingSetLru;
+export function getWorkingSetLru(): WorkingSetLru;
+export function recordRead(modelId: string, entry: WorkingSetEntry): void;
+export function recordReadRange(modelId: string, path: string, startLine: number, endLine: number, content?: string): void;
+export function currentEntries(modelId: string): WorkingSetEntry[];
+
+export function getDefaultBus(): EventBus;
+export function createEventBus(): EventBus;
+export function getDefaultCommons(): CommonsClient;
+export function createCommons(): CommonsClient;
+export function getDefaultTransport(): TransportClient;
+export function createTransport(): TransportClient;
+export function getDefaultLocks(): LockClient;
+export function createLocks(): LockClient;
+export function getDefaultWorkingSet(): WorkingSetStore;
+export function createWorkingSetStore(): WorkingSetStore;
+export class InMemoryTaskQueue implements TaskQueue {
+  constructor(tasks: readonly Task[]);
+  readonly tasks: Task[];
+  claimNext(workerId: string): Task | null;
+  retire(workerId: string): void;
+  remaining(): number;
+}
+export function createTaskQueue(tasks: readonly Task[]): TaskQueue;
+
+Wire format:
+type WriteIntent = { intent: string; path: string; added: string[]; atLine: number; removedLineCount: number; }
+export const WriteIntentSchema: z.ZodObject for WriteIntent.
+
+4. EXPECTS FROM OTHERS
+folder number unknown (task bus/bus folder): EventBus with synchronous emit(event, ...args), on/once/off, optional publish/subscribe/waitFor; emits compaction.done after compaction.requested when the compactor has finished slot-5 compaction.
+folder number unknown (COMMONS store): CommonsClient.write(args: { intent?, path, author, added?, atLine?, removedLineCount?, content? }) and optional read(path): string | unknown.
+folder number unknown (transport/model invocation): TransportClient.stream(modelId, prompt, {system?}) returning string | AsyncIterable<string | chunk> OR complete(...) OR chat(...).
+folder number unknown (locks): LockClient.acquire/acquireLocks/release/releaseLocks (any method present is used; missing methods become no-ops).
+folder number unknown or caller (task queue): an object implementing TaskQueue, especially claimNext(workerId) and optionally retire(workerId); InMemoryTaskQueue is provided.
+folder number unknown (working-set/compactor): WorkingSetStore.currentEntries(modelId) OR the lru.ts currentEntries(modelId) function.
+Type alignment: Task, PresenceEntry, WorkingSetEntry, EngineerRef fields as declared in src/types.ts.
+Workers obtain brief/digest/presence from commons paths BRIEF.md, STATE/digest.md, STATE/presence.json when commons.read exists; absent data degrades to empty.
+
+5. PROVIDES TO OTHERS
+buildPrompt(args) builds the mandatory five-slot engineering prompt and requests compaction before trimming slot 5.
+EngineerWorker.run and runCrew execute the engineering crew over shared task queues with lock-protected writes.
+currentEntries(modelId) and WorkingSetLru provide the compactor's slot-5 input.
+CommonsError is the standard error type for folder-07 failures.
+WriteIntentSchema defines the structured model output that folder-07 writes through COMMONS.
+Stubs allow each dependent folder to import and test against a working implementation.
+
+6. CONFIG
+COMMONS_PROMPT_TOKEN_BUDGET: number, default 4000 (also accepted as PROMPT_TOKEN_BUDGET): estimated 4-characters-per-token ceiling for buildPrompt before it emits compaction.requested.
+deps.consecutiveFailureLimit: number, default 3: consecutive failed tasks before worker retirement.
+WorkingSetLru constructor capacity: number, default 12, hard maximum is constructor argument but intended 12.
+deps fields bus, commons, transport, locks, queue, workingSet, promptTokenBudget are injectable.
+Stub server addresses and credentials: none.
+
+7. RUN STANDALONE
+cd parts/folder-07
+npm install
+npm run build
+npm test
+
+Expected:
+npm run build exits 0.
+npm test builds and reports 12 passing tests, 0 failures.
+
+8. INTEGRATION NOTES
+buildPrompt is synchronous; compaction is therefore assumed synchronous: emitting compaction.requested triggers the stub bus to synchronously emit compaction.done, then slot 5 is trimmed. A real async bus must either call compaction synchronously or have compaction done before buildPrompt returns. It is impossible to await inside a synchronous signature.
+EngineerWorker reads BRIEF.md, STATE/digest.md, and STATE/presence.json through commons.read; if read is unavailable or parsing fails, the corresponding field degrades gracefully to empty.
+Task claim sets come from Task.claimSet first, then Task.locks.
+Duck-typed dependency methods are called with .call so their this binding is preserved.
+Write-intent parsing accepts a fenced JSON block or surrounding prose and one corrective retry; the retry uses a corrective system note.
+Transport output chunks are normalized for string, text/content, delta.content, and OpenAI-style choices[0].delta.content.
+A task that fails is marked failed in its own queue entry; unstarted tasks remain pending so they naturally stay available to other workers.
+Retirement emits worker.retired, engineer.retired, and crew.worker.retired with modelId, consecutiveFailures, and returnedTaskCount when available.
+runCrew's third argument accepts either CrewDependencies or { dependencies, concurrency }; concurrency is accepted for compatibility but the current implementation runs all N workers concurrently.
+Use default stubs for standalone testing; the integrator may pass real dependencies through constructor or runCrew.
+EngineerWorker.read commons data assumes the above conventional paths; adjust if the integration uses different path names.
+The LRU default instance is process-global and per-model namespaced.
+
+9. DO NOT CHANGE
+The WriteIntent wire format fields intent, path, added, atLine, removedLineCount.
+buildPrompt's slot order and the rule that slots 1-4 are never trimmed.
+The exact compaction bus event names compaction.requested and compaction.done.
+task.completed, run.failed, and worker.retired bus event semantics.
+The default consecutive-failure retirement threshold of 3 and the default 12-entry LRU cap.
+CommonsError shape and its folder value folder-07.
+runCrew signature including engineerRefs + tasks.

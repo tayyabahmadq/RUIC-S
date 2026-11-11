@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self' file:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'" />
+  <title>Ruic — Control Deck</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="win">
+
+    <!-- ── title bar: traffic lights · project pill · state chips ── -->
+    <header class="titlebar">
+      <div class="traffic"><i class="tl-r"></i><i class="tl-y"></i><i class="tl-g"></i></div>
+      <div class="project-pill">ruic — common-s</div>
+      <button type="button" class="cmdk-hint" id="cmdkHint" aria-label="Open the command palette">
+        <span class="cmdk-search-ic" aria-hidden="true">⌕</span>
+        Search commands…
+        <kbd class="cmdk-keys">Ctrl K</kbd>
+      </button>
+      <div class="tb-right">
+        <span id="tbRun" class="chip dim">⎇ idle</span>
+        <span id="phaseStrip" class="chip dim">phase: idle</span>
+        <span id="bridgeStatus" class="chip dim">● bridge down</span>
+      </div>
+    </header>
+
+    <div class="shell">
+
+      <!-- ── activity bar (icon rail) ── -->
+      <nav class="activitybar" aria-label="Views">
+        <button class="navitem act on" data-nav="chat" title="Chat" aria-label="Chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v10.5H9l-5 4z"/></svg></button>
+        <button class="navitem act" data-nav="overview" title="Overview" aria-label="Overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-4"/></svg></button>
+        <button class="navitem act" data-nav="findings" title="Findings" aria-label="Findings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3.5l6.5 2.7v4.6c0 4.2-2.7 7-6.5 8.7-3.8-1.7-6.5-4.5-6.5-8.7V6.2z"/><path d="M12 8.8v3.4"/><path d="M12 15.2h.01"/></svg><span class="actbadge" id="findingsBadge" style="display:none" aria-label="open findings">0</span></button>
+        <button class="navitem act" data-nav="crew" title="Crew" aria-label="Crew"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9.5" cy="8.5" r="3"/><path d="M4 19c.5-3 2.7-4.5 5.5-4.5s5 1.5 5.5 4.5"/><circle cx="16.5" cy="9.5" r="2.3"/><path d="M17.5 14.6c2.3.4 3.7 1.8 4 4.4"/></svg></button>
+        <button class="navitem act" data-nav="preview" title="Preview" aria-label="Preview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.5h17"/></svg></button>
+        <div class="actfoot">
+          <div class="actdot ok" title="keystore — keys live in main only" role="img" aria-label="keystore: keys live in main only"></div>
+          <div class="actdot ok blink" title="common-s — brain online" role="img" aria-label="common-s: brain online"></div>
+        </div>
+      </nav>
+
+      <!-- ── explorer sidebar ── -->
+      <aside class="explorer">
+        <div class="exhead">Explorer</div>
+        <div class="exsection">
+          <div class="exsec-title">ruic</div>
+          <button class="navitem exrow" data-nav="chat"><span class="exlabel">chat</span><span class="navpill" id="chatPill" style="display:none">live</span></button>
+          <button class="navitem exrow" data-nav="overview"><span class="exlabel">overview</span></button>
+          <button class="navitem exrow" data-nav="findings"><span class="exlabel">findings</span></button>
+          <button class="navitem exrow" data-nav="crew"><span class="exlabel">crew</span></button>
+          <button class="navitem exrow" data-nav="preview"><span class="exlabel">preview</span></button>
+        </div>
+        <div class="exsection">
+          <div class="exsec-title">COMMONS</div>
+          <div class="extree">
+            <div class="exitem"><span class="exfile">▸</span>BRIEF.md</div>
+            <div class="exitem"><span class="exfolder">▾</span>STATE<span class="exmuted">  contracts · trybox · guides · vectors</span></div>
+            <div class="exitem"><span class="exfolder">▾</span>WORKSPACE<span class="exmuted">  artifacts</span></div>
+            <div class="exitem"><span class="exfolder">▸</span>ARCHIVE<span class="exmuted">  digests · guides@vN</span></div>
+          </div>
+        </div>
+        <div class="exsection">
+          <div class="exsec-title">ZEAK</div>
+          <div class="extree">
+            <div class="exitem"><span class="exkey">economic guard</span><span class="exmuted">  cache · prune · cap · stop</span></div>
+            <div class="exitem"><span class="exkey">the teacher</span><span class="exmuted">  trybox → model 2/3 → guides</span></div>
+          </div>
+        </div>
+        <div class="exfoot">
+          <div class="keybtn"><span class="status-dot ok"></span>keystore · main-only</div>
+          <div class="engln"><i class="status-dot ok blink"></i>engine · brain online</div>
+        </div>
+      </aside>
+
+      <!-- ── main / editor area ── -->
+      <main class="main" id="main">
+        <div class="viewwrap viewwrap-chat">
+
+          <!-- ═══ CHAT — the editor-grade main view ═══ -->
+          <section class="view view-chat on" id="v-chat">
+            <div class="chatpanelfull">
+              <div class="chatpanel-head">
+                <span class="cp-title">RUIC Chat</span>
+                <span class="chip ambient wait" id="ambientChip"><span class="status-dot"></span><span class="ambient-label">waiting for brief</span></span>
+                <span id="chatPhase" class="chip dim">idle</span>
+              </div>
+              <div class="chat" id="streamChat">
+                <div class="chat-empty" id="chatEmpty">
+                  <div class="chat-watermark">RUIC</div>
+                  <div class="chat-empty-title">What should the crew build?</div>
+                  <div class="chat-empty-sub">One brief in. Laya routes it, engineers execute, security audits, Zeak guards every token — and the system learns from every failure.</div>
+                  <button type="button" class="btn primary hero-cta" id="heroCta">Compose the brief</button>
+                  <div class="cta-micro">runs locally · keys never leave the main process</div>
+                  <div class="chat-empty-quick">
+                    <button class="quick" data-quick="build a trivial app">build a trivial app</button>
+                    <button class="quick" data-quick="write a readme for a calculator app">write a readme for a calculator app</button>
+                    <button class="quick" data-quick="fix a small typo in a css label">fix a small typo in a css label</button>
+                  </div>
+                </div>
+                <div id="streamList"></div>
+              </div>
+              <div class="chatbottom">
+                <form class="chatcard" id="chatForm">
+                  <div class="chatcard-row">
+                    <button type="button" class="chatbtn abort" id="chatAbortBtn" title="Abort the running deck" disabled>■</button>
+                    <input id="chatInput" placeholder="Message RUIC — what should the crew build?" autocomplete="off" spellcheck="false" aria-label="Message for the crew" />
+                  </div>
+                  <div class="chatadv" id="chatAdv" hidden>
+                    <div class="advfield">
+                      <label class="advlbl" for="goalInput">goal</label>
+                      <input id="goalInput" type="text" placeholder="app builds" autocomplete="off" spellcheck="false" />
+                      <p class="advhint">comma-separated success criteria — the run is verified against these</p>
+                    </div>
+                    <div class="advfield">
+                      <label class="advlbl" for="briefInput">description</label>
+                      <textarea id="briefInput" rows="3" placeholder="Constraints, stack, style — anything else the crew should know" spellcheck="false"></textarea>
+                      <p class="advhint">appended to your message as context for every department</p>
+                    </div>
+                  </div>
+                  <div class="chatcard-toolbar">
+                    <button type="button" class="advtoggle" id="advToggle" aria-expanded="false" aria-controls="chatAdv"><span class="advcaret" aria-hidden="true">▸</span> advanced options</button>
+                    <span class="modelchip">qwen · local</span>
+                    <span class="modelchip dim">free</span>
+                    <span class="grow"></span>
+                    <button type="submit" class="sendcircle" id="chatSendBtn" title="Send — starts a governed run">➤</button>
+                  </div>
+                </form>
+                <div class="chatbar-foot">
+                  <span>↵ send · runs are governed · frontier passes Zeak</span>
+                  <span id="chatAbortHint" style="display:none">abort ■ stops the run gracefully</span>
+                  <span class="worklocally">▤ work locally · ollama</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ═══ OVERVIEW ═══ -->
+          <section class="view" id="v-overview">
+            <div class="banner">
+              <span id="runIdChip" class="runid">IDLE</span>
+              <span class="t" id="runTitle">Awaiting a brief — nothing is running</span>
+              <span style="flex:1"></span>
+              <span class="chip dim" id="elapsedChip">00:00:00</span>
+            </div>
+            <div class="statgrid">
+              <div class="stat"><div class="lbl">phase</div><div class="big" id="statPhase">idle</div><div class="cap" id="statPhaseCap">the crew is at rest</div></div>
+              <div class="stat"><div class="lbl">token spend</div><div class="big" id="statTokens">0</div><div class="bar"><i id="tokenBar"></i></div><div class="cap">zeak caps every department · local-first routing on</div></div>
+              <div class="stat"><div class="lbl">tasks</div><div class="big" id="statTasks">0</div><div class="cap" id="statTasksCap">task ledger rebuilt from the event stream</div></div>
+              <div class="stat"><div class="lbl">findings</div><div class="big" id="statFindings">0</div><div class="cap">security department scans every diff</div></div>
+            </div>
+            <div class="duo">
+              <div class="panel">
+                <div class="phead"><span>⌰ task ledger</span><span class="chip dim">live</span></div>
+                <div class="pbody scrollx">
+                  <table class="tbl">
+                    <thead><tr><th>ID</th><th>File</th><th>Holder</th><th>Status</th></tr></thead>
+                    <tbody id="taskBody"></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="phead"><span>⋮⋮ routing &amp; economics</span><span class="chip dim">laya · zeak</span></div>
+                <div class="pbody">
+                  <div class="feed" id="overviewRouting"></div>
+                  <div class="feedempty" id="overviewRoutingEmpty">no routing decisions yet — run a brief</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ═══ FINDINGS ═══ -->
+          <section class="view" id="v-findings">
+            <div class="vhead"><div><h1>Findings</h1><p>Security-audit output — every raise and resolution, with the flagged line</p></div><span class="chip dim">dept 5 · free scanning</span></div>
+            <div class="panel" style="margin-bottom:12px">
+              <div class="phead"><span>⚡ routing &amp; economics feed</span></div>
+              <div class="pbody"><div class="feed" id="routingFeedHolder"></div><div class="feedempty" id="routingFeedEmpty">no routing decisions yet — run a brief</div></div>
+            </div>
+            <div class="panel">
+              <div class="phead"><span>🛡 findings feed</span></div>
+              <div class="pbody"><div id="findingsList" class="findings-list"></div></div>
+            </div>
+          </section>
+
+          <!-- ═══ CREW ═══ -->
+          <section class="view" id="v-crew">
+            <div class="vhead"><div><h1>Crew</h1><p>Swappable stateless workers — health probed from main, keys never cross the bridge</p></div></div>
+            <div id="crewRosterBig" class="crewgrid"></div>
+
+            <div class="vhead" style="margin-top:22px"><div><h1 style="font-size:14px">Model pool</h1><p>Department-agnostic models — add any model with its configuration, then assign it to departments (or leave AUTO and the lead decides)</p></div>
+              <button id="addModelBtn" class="btn primary">＋ Add model</button></div>
+            <form id="addModelForm" class="panel" style="display:none;margin-bottom:12px">
+              <div class="phead"><span>new model</span></div>
+              <div class="pbody formgrid">
+                <label>model id<input id="nmId" placeholder="qwen-7b" required /></label>
+                <label>model tag<input id="nmModel" placeholder="qwen2.5-coder:7b" required /></label>
+                <label>provider<select id="nmProvider"><option>openai-compatible</option><option>anthropic</option></select></label>
+                <label>endpoint<input id="nmEndpoint" placeholder="http://localhost:11434/v1" required /></label>
+                <label>context window (tokens)<input id="nmCtx" type="number" min="1024" value="32768" required /></label>
+                <label>parameter count (B)<input id="nmParams" type="number" step="0.1" min="0" placeholder="1.5" /></label>
+                <label class="chk"><input id="nmFree" type="checkbox" checked /> free (no paid API)</label>
+              </div>
+              <div class="btnrow" style="padding:0 13px 13px">
+                <button type="submit" class="btn primary">Add to pool</button>
+                <button type="button" class="btn" id="nmCancel">Cancel</button>
+              </div>
+            </form>
+            <div id="modelPool" class="crewgrid"></div>
+            <p class="fnote">free local models in the crew automatically join the FreeLLM failover loop — if one doesn't answer, the next takes over until the goal is met</p>
+
+            <div class="vhead" style="margin-top:22px"><div><h1 style="font-size:14px">Department assignment</h1><p>who runs each seat this run — AUTO lets the lead/Laya decide</p></div></div>
+            <div class="statgrid" style="grid-template-columns:repeat(2,1fr)" id="assignGrid"></div>
+          </section>
+
+          <!-- ═══ PREVIEW ═══ -->
+          <section class="view" id="v-preview">
+            <div class="vhead"><div><h1>Preview</h1><p>Sandboxed view of the merged output — file:// inside the run's outputDir only</p></div></div>
+            <div class="pvgrid">
+              <div class="panel">
+                <div class="phead"><span>files · MANIFEST.json</span></div>
+                <div class="pbody"><div id="previewFileList" class="tree"></div></div>
+              </div>
+              <div class="panel">
+                <div class="phead"><span id="previewTitle">Preview</span>
+                  <span style="display:flex;gap:6px">
+                    <button id="previewOpenBtn" class="btn">Open</button>
+                    <button id="previewCloseBtn" class="btn danger" disabled>Close</button>
+                  </span>
+                </div>
+                <div class="pbody">
+                  <div id="previewPanel" class="rendered-empty">
+                    <div class="sigcard">
+                      <div class="logo"></div>
+                      <h3>Sandboxed Preview</h3>
+                      <p>Generated output renders in a contained WebContentsView — network and out-of-dir file:// requests are cancelled at the session layer.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </main>
+    </div>
+
+    <!-- ── status bar (mirrors the titlebar state chips — one state, both bars) ── -->
+    <footer class="statusbar">
+      <span class="sb-item sb-branch" id="sbBranch">⎇ idle</span>
+      <span class="sb-item" id="sbBridge">● bridge down</span>
+      <span class="sb-item" id="sbPhase">phase: idle</span>
+      <span class="sb-item hide-s">zeak · guard on</span>
+      <span class="grow"></span>
+      <span class="sb-item mono" id="elapsedTimer">00:00:00</span>
+      <span class="sb-item sb-gold mono" id="tokenSpend">Tokens: 0</span>
+      <span class="sb-remote hide-s">qwen · local</span>
+    </footer>
+  </div>
+
+  <!-- ── ⌘K command palette (CSP-safe: no inline handlers, no external assets) ── -->
+  <div class="cmdk-overlay hidden" id="cmdkOverlay" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="cmdk-panel">
+      <div class="cmdk-inputrow">
+        <span class="cmdk-search-ic" aria-hidden="true">⌕</span>
+        <input id="cmdkInput" placeholder="Type a command or view…" autocomplete="off" spellcheck="false" aria-label="Search commands" role="combobox" aria-expanded="true" aria-controls="cmdkList" />
+      </div>
+      <div class="cmdk-list" id="cmdkList" role="listbox" aria-label="Commands"></div>
+      <div class="cmdk-foot">
+        <span><kbd>↑↓</kbd> navigate</span>
+        <span><kbd>↵</kbd> run</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="prelude.js"></script>
+  <script src="../shared/bridge-types.js"></script>
+  <script src="bind-bt.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

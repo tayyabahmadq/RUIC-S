@@ -1,0 +1,550 @@
+1. WHAT I BUILT
+===============
+folder-08 is the adversarial security gate: a pure-function ruleset of seven
+vulnerability detectors (SEC-001..SEC-007), a multi-auditor scan engine that
+deduplicates per (ruleId, path, line) while keeping the first detector's
+attribution and capping at three hits per rule per file, and a bounded
+remediation loop that emits `security-remediation` tasks on the shared bus,
+re-scans only the patched (file, rule) pair, and escalates anything still
+unresolved after two rounds to the leader's review queue. Low/medium findings
+never block the gate: they pass through as advisories. Everything is
+deterministic — same artifacts and auditors always produce byte-identical
+reports — because rule ids, finding ids, task ids and escalation ids are all
+derived from content, never from a counter or a clock (the clock is injected).
+Zero runtime dependencies; `zod` was permitted but deliberately not used (see
+§8.9). Builds under `tsc --strict` plus `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters` and
+`noImplicitReturns`, with 145 passing tests across 6 test files.
+
+2. FILE MAP
+===========
+package.json                      npm manifest; zero runtime deps, devDeps typescript + @types/node; scripts build/typecheck/test/smoke/verify.
+tsconfig.json                     ES2022 + NodeNext + strict and 6 extra safety flags; rootDir "." outDir "dist" (emits dist/src + dist/test).
+INTEGRATION.txt                   this file — the authoritative integration contract.
+src/index.ts                      the only public entry point; re-exports everything in §3 and nothing else.
+src/types.ts                      types only, zero runtime values. Rule/Scan/Remediation vocabularies and every cross-folder interface folder-08 expects.
+src/errors.ts                     CommonsError (code/folder/detail), FOLDER_ID='folder-08', isCommonsError, internal fail() helper.
+src/rules.ts                      A) RULES array (7 rules), RULE_IDS, getRule, rulesForAuditor, hasDetector, isRuleId, severityRank, SEVERITY_ORDER, SECRET_MIN_LENGTH, escapeHtml, isCommentLine.
+src/scan.ts                       B) scanAll, scanFile, findingId, summarizeFindings, groupByRule, gateBlocked, worstSeverity, contributingAuditors, MAX_HITS_PER_RULE_PER_FILE, DEFAULT_MIN_AUDITORS, EVIDENCE_MAX_LENGTH, FILE_LEVEL_EVIDENCE.
+src/remediate.ts                  C) remediateFindings, buildRemediationTask, describeRemediation, selectPatchable, toAdvisories, envVarName, remediationTaskId, MAX_REMEDIATION_ROUNDS.
+src/stubs.ts                      working in-memory TaskBus / ArtifactStore / EscalationQueue + frozen clock + naive patchers. REPLACE THE BODIES, KEEP THE SHAPES.
+test/errors.test.ts               4 tests  — CommonsError shape, optional detail, toJSON, isCommonsError discrimination.
+test/rules.test.ts                30 tests — every rule with positive AND negative cases, cross-run determinism, non-mutation, registry helpers.
+test/scan.test.ts                 26 tests — dedupe/attribution, corroboration, the 3-hit cap, path filters, quorum, determinism, error paths.
+test/remediate.test.ts            23 tests — five end-to-end loop scenarios plus task/selection/bus-stub contracts and error codes.
+test/stubs.test.ts                14 tests — every stub, including the simulated worker patching through the store.
+test/smoke.test.ts                48 tests — 40 named smoke tests (one per public export), 5 grouped behavioural checks, 1 full async gate run, 1 export-set contract test, 1 type-surface compile check.
+
+3. PUBLIC INTERFACE
+===================
+Everything below is importable from `src/index.ts` (package entry
+`@commons/folder-08-security-gate`). Nothing else is public.
+
+3.1 ERRORS
+-----------
+class CommonsError extends Error {
+  readonly code: string;            // stable machine code, see §6
+  readonly folder: 'folder-08';
+  readonly detail: string | undefined;
+  constructor(code: string, message: string, detail?: string);
+  toJSON(): { name: string; code: string; folder: 'folder-08'; message: string; detail: string | undefined };
+}
+const FOLDER_ID: 'folder-08';
+function isCommonsError(value: unknown): value is CommonsError;
+
+3.2 A) THE RULESET
+------------------
+const RULES: readonly Rule[];
+const RULE_IDS: { readonly EVAL: 'SEC-001'; readonly HTML_SINK: 'SEC-002';
+                  readonly SQL_CONCAT: 'SEC-003'; readonly HARDCODED_SECRET: 'SEC-004';
+                  readonly INSECURE_TRANSPORT: 'SEC-005'; readonly WEAK_RANDOM: 'SEC-006';
+                  readonly PASSWORD_COMPARE: 'SEC-007' };
+const SEVERITY_ORDER: readonly Severity[];        // ['critical','high','medium','low']
+const SECRET_MIN_LENGTH: 8;
+function getRule(id: RuleId, rules?: readonly Rule[]): Rule;          // throws E_UNKNOWN_RULE
+function rulesForAuditor(auditorId: string, rules?: readonly Rule[]): Rule[];
+function hasDetector(rule: Rule, auditorId: string): boolean;          // true if 'any' in detectors
+function isRuleId(value: string): value is RuleId;                    // /^SEC-\d{3}$/
+function severityRank(severity: Severity): number;                    // critical=0 .. low=3
+function isCommentLine(line: string): boolean;
+function escapeHtml(value: string): string;                           // & < > " '
+
+Shipped ruleset, in declaration order (this order defines report order):
+
+| id        | severity | detectors | patchStrategy  | fires on |
+|-----------|----------|-----------|----------------|----------|
+| SEC-001   | critical | ['any']   | (none)         | `eval(`, `window.eval(`, `foo.eval(`, `new Function(` outside comment-only lines |
+| SEC-002   | high     | ['any']   | 'escape'       | innerHTML/outerHTML assigned a template literal with `${`, a concatenation containing a quote, or any non-literal expression; insertAdjacentHTML/document.write whose HTML argument is not a literal. Suppressed when the line contains escapeHtml/escape_html/sanitiz/DOMPurify/encodeURI |
+| SEC-003   | high     | ['any']   | (none)         | SQL verb + (`+` or `${`) + (quote/`?`/`$1`/`%s`/`name:`) + (SQL context noun or FROM/INTO/WHERE/VALUES/SET/JOIN/TABLE) |
+| SEC-004   | critical | ['any']   | 'env-var'      | (api_key\|secret\|token\|password\|passwd\|pwd\|credential(s)\|private_key\|auth_token\|client_secret) assigned a literal >= 8 chars; quoted always, unquoted only if it also contains a digit; plus `fileTest` for PEM PRIVATE KEY blocks |
+| SEC-005   | medium   | ['any']   | 'https'        | `http://` outside comment-only lines; exempt for loopback (localhost/127.0.0.0/0.0.0.0/[::1]) and XML namespace URIs (w3.org, purl.org, xmlsoap.org, schemas.microsoft.com, schemas.openxmlformats.org, ns.adobe.com, apache.org, iptc.org) |
+| SEC-006   | medium   | ['any']   | 'crypto-random'| `Math.random(` on a line that also names a security value; identifiers are split on camelCase/underscore and matched against {id,ids,token(s),session(s),secret(s),nonce(s),uuid(s),guid(s),key(s),salt(s),otp(s),pin(s),csrf,state,seed,credential(s)} |
+| SEC-007   | medium   | ['any']   | (none)         | `===`/`!==`/`==`/`!=`/`.localeCompare()` where either operand names pass(word\|wd\|code\|phrase)/secret/token/credential/apikey/api_key/private_key/pin/otp; suppressed for timingSafeEqual/bcrypt/argon2/scrypt/pbkdf2/compareSync/verifyPassword; plus `fileTest` for comparisons split across lines |
+
+interface Rule {
+  readonly id: RuleId;                                  // `SEC-${string}`, e.g. 'SEC-004'
+  readonly title: string;
+  readonly severity: Severity;                          // 'critical'|'high'|'medium'|'low'
+  readonly detectors: readonly string[];                // auditor ids, or 'any'
+  readonly test: (line: string) => boolean;             // PURE, non-global regex only
+  readonly fileTest?: (fileContent: string) => boolean; // PURE, whole file
+  readonly patchStrategy?: PatchStrategy;               // 'escape'|'env-var'|'https'|'crypto-random'
+  readonly locateFile?: (fileContent: string) => number[]; // additive extension, see §8.1
+  readonly guidance: string;
+}
+
+3.3 B) THE SCAN ENGINE
+----------------------
+const MAX_HITS_PER_RULE_PER_FILE: 3;     // hard cap from the brief; options may lower it
+const DEFAULT_MIN_AUDITORS: 2;           // gate quorum
+const EVIDENCE_MAX_LENGTH: 240;
+const FILE_LEVEL_EVIDENCE: '[file-level match]';
+
+function scanAll(
+  artifacts: readonly Artifact[],
+  auditors: readonly (ModelRef | string)[],
+  options?: ScanOptions,
+): ScanReport;
+
+function scanFile(
+  artifact: Artifact,
+  auditors: readonly (ModelRef | string)[],
+  ruleIds: readonly RuleId[],
+  options?: ScanOptions,
+): Finding[];
+
+function findingId(ruleId: RuleId, path: string, line: number): string;   // 'FND-<12 hex>'
+function summarizeFindings(findings: readonly Finding[]): SeverityCounts;
+function groupByRule(findings: readonly Finding[]): Map<RuleId, Finding[]>;
+function gateBlocked(findings: readonly Finding[]): boolean;             // any unresolved critical/high
+function worstSeverity(findings: readonly Finding[]): Severity | null;
+function contributingAuditors(findings: readonly Finding[]): string[];   // first-attribution order
+
+interface Artifact { readonly path: string; readonly code: string; }
+interface ModelRef {
+  readonly id: string;
+  readonly name?: string | undefined;
+  readonly provider?: string | undefined;
+  readonly role?: 'leader' | 'worker' | 'auditor' | undefined;
+}
+interface ScanOptions {
+  readonly rules?: readonly Rule[] | undefined;                        // default RULES
+  readonly maxHitsPerRulePerFile?: number | undefined;                 // default 3, clamped [1,50]
+  readonly excludePaths?: readonly (string | RegExp)[] | undefined;
+  readonly includePaths?: readonly (string | RegExp)[] | undefined;   // empty = scan all
+  readonly minAuditors?: number | undefined;                           // default 2
+}
+interface Finding {
+  readonly id: string;                 // deterministic
+  readonly ruleId: RuleId;
+  readonly severity: Severity;
+  readonly path: string;
+  readonly line: number;               // 1-based, always >= 1
+  readonly detectorModelId: string;    // FIRST auditor to see it
+  readonly resolved: boolean;          // always false at scan time
+  readonly evidence: string;           // collapsed + truncated to 240
+  readonly message: string;            // `${rule.title} — ${evidence}`
+  readonly patchStrategy?: PatchStrategy | undefined;
+  readonly auditorCount: number;       // corroboration: 2 means two models agreed
+  readonly blocking: boolean;          // severity is critical or high
+}
+interface ScanReport {
+  readonly findings: readonly Finding[];
+  readonly total: number;
+  readonly filesScanned: number;
+  readonly filesSkipped: number;
+  readonly auditors: readonly string[];
+  readonly rulesEvaluated: number;
+  readonly bySeverity: SeverityCounts;                                // zero-filled, all 4 keys
+  readonly byRule: Readonly<Record<string, number>>;
+  readonly byModel: Readonly<Record<string, number>>;                 // first attribution only
+  readonly byPath: Readonly<Record<string, number>>;
+  readonly corroborated: number;                                      // auditorCount >= 2
+}
+type SeverityCounts = Record<Severity, number>;
+
+3.4 C) THE REMEDIATION LOOP
+---------------------------
+const MAX_REMEDIATION_ROUNDS: 2;        // hard ceiling, options.maxRounds is clamped to [0,2]
+
+async function remediateFindings(
+  findings: readonly Finding[],
+  deps: RemediationDeps,
+  options?: RemediationOptions,
+): Promise<RemediationResult>;
+
+function buildRemediationTask(
+  finding: Finding, round: number, createdAt: string, rules?: readonly Rule[],
+): RemediationTask;                     // throws E_NO_PATCH_STRATEGY / E_UNKNOWN_RULE
+
+function describeRemediation(strategy: PatchStrategy, finding: Finding): {
+  readonly instruction: string; readonly suggestion: string; };          // PURE
+function selectPatchable(findings: readonly Finding[], rules?: readonly Rule[]): Finding[];
+function toAdvisories(findings: readonly Finding[], rules?: readonly Rule[]): Advisory[];
+function envVarName(evidence: string): string;                           // 'apiKey' -> 'API_KEY'
+function remediationTaskId(findingId: string, round: number): string;    // 'RTD-<8 hex>'
+
+interface RemediationDeps {
+  readonly bus: TaskBus;                                        // REQUIRED
+  readonly artifacts?: ArtifactStore | undefined;               // live re-scan source
+  readonly escalations?: EscalationQueue | undefined;           // leader review queue
+  readonly now?: (() => string) | undefined;                    // default new Date().toISOString
+}
+interface RemediationOptions {
+  readonly rules?: readonly Rule[] | undefined;                 // default RULES
+  readonly artifacts?: readonly Artifact[] | undefined;         // snapshot fallback
+  readonly maxRounds?: number | undefined;                      // default 2, clamped [0,2]
+}
+interface RemediationResult {
+  readonly rounds: number;
+  readonly tasks: readonly RemediationTask[];
+  readonly accepted: number;
+  readonly rejected: number;
+  readonly resolved: readonly Finding[];        // proven cleared by a re-scan
+  readonly unresolved: readonly Finding[];      // every blocking finding not proven cleared
+  readonly escalations: readonly Escalation[];
+  readonly advisories: readonly Advisory[];      // low/medium, never blocking
+  readonly rescans: number;                     // (file, rule) re-scans performed
+  readonly rescanSource: RescanSource;          // 'artifact-store' | 'snapshot' | 'none'
+}
+interface RemediationTask {
+  readonly id: string;                          // 'RTD-<8 hex>', deterministic per (findingId, round)
+  readonly kind: 'security-remediation';       // dispatch key for the worker pool
+  readonly folder: 'folder-08';
+  readonly priority: TaskPriority;              // 0 critical .. 3 low, lower runs first
+  readonly round: number;                       // 1-based
+  readonly findingId: string;
+  readonly ruleId: RuleId;
+  readonly severity: Severity;
+  readonly patchStrategy: PatchStrategy;
+  readonly targetPath: string;
+  readonly targetLine: number;                  // 1-based, refreshed each re-scan
+  readonly evidence: string;
+  readonly instruction: string;                 // what is wrong + how to fix it
+  readonly suggestion: string;                  // concrete snippet to aim for
+  readonly detectorModelId: string;             // which auditor found it
+  readonly createdAt: string;                   // ISO-8601
+}
+type TaskPriority = 0 | 1 | 2 | 3;
+type RescanSource = 'artifact-store' | 'snapshot' | 'none';
+interface EnqueueReceipt { readonly taskId: string; readonly accepted: boolean; readonly note?: string | undefined; }
+interface BusTaskOutcome { readonly taskId: string; readonly ok: boolean; readonly error?: string | undefined; }
+
+3.5 THE THREE INTERFACES FOLDER-08 STUBS (4)
+----------------------------------------------
+interface TaskBus {
+  enqueue(task: RemediationTask): Promise<EnqueueReceipt>;
+  awaitSettlement?(receipt: EnqueueReceipt): Promise<BusTaskOutcome>;   // optional
+}
+interface ArtifactStore { read(path: string): Promise<Artifact>; }
+interface EscalationQueue { push(entry: Escalation): Promise<void>; }
+
+3.6 ESCALATIONS AND ADVISORIES
+-------------------------------
+type EscalationReason = 'unresolved-after-patching' | 'no-patch-strategy'
+                      | 'task-rejected' | 'task-failed' | 'rescan-unavailable';
+interface Escalation {
+  readonly id: string;                          // 'ESC-<8 hex>', deterministic
+  readonly kind: 'security-escalation';
+  readonly folder: 'folder-08';
+  readonly findingId: string;
+  readonly ruleId: RuleId;
+  readonly severity: Severity;
+  readonly path: string;
+  readonly line: number;
+  readonly detectorModelId: string;
+  readonly reason: EscalationReason;
+  readonly rounds: number;                      // rounds attempted before escalating
+  readonly detail: string;                      // human-readable explanation
+  readonly evidence: string;
+  readonly createdAt: string;
+}
+interface Advisory {
+  readonly findingId: string;
+  readonly ruleId: RuleId;
+  readonly severity: Severity;                  // always 'low' | 'medium'
+  readonly path: string;
+  readonly line: number;
+  readonly detectorModelId: string;
+  readonly message: string;
+  readonly suggestion: string;                  // rule `guidance`, verbatim
+  readonly blocking: false;
+}
+
+3.7 STUBS — REMOVE AT INTEGRATION TIME
+--------------------------------------
+function createStubTaskBus(options?: StubTaskBusOptions): StubTaskBus;
+function createStubArtifactStore(initial?: readonly Artifact[]): StubArtifactStore;
+function createStubEscalationQueue(): StubEscalationQueue;
+function createFixedClock(iso: string): () => string;
+function createStubDeps(options?: StubDepsOptions): {
+  deps: RemediationDeps; bus: StubTaskBus; artifacts: StubArtifactStore; escalations: StubEscalationQueue;
+};
+const stubPatchers: Readonly<Record<PatchStrategy, (code: string) => string>>;  // naive, TEST AID ONLY
+interface StubTaskBusOptions {
+  readonly onEnqueue?: ((task: RemediationTask) => void | Promise<void>) | undefined;
+  readonly accept?: ((task: RemediationTask) => boolean) | undefined;
+  readonly settle?: 'ok' | 'fail' | 'none' | undefined;   // 'none' removes awaitSettlement
+  readonly settleError?: string | undefined;
+}
+interface StubDepsOptions extends StubTaskBusOptions {
+  readonly artifacts?: readonly Artifact[] | undefined;
+  readonly patchers?: Readonly<Record<string, (code: string) => string>> | undefined;
+  readonly clock?: string | undefined;
+}
+interface StubTaskBus extends TaskBus {
+  readonly enqueued: RemediationTask[]; readonly settlements: BusTaskOutcome[]; drain(): RemediationTask[];
+}
+interface StubArtifactStore extends ArtifactStore {
+  write(artifact: Artifact): void; writeAll(artifacts: readonly Artifact[]): void;
+  readSync(path: string): Artifact | undefined;
+  patch(path: string, transform: (code: string) => string): Artifact; size(): number;
+}
+interface StubEscalationQueue extends EscalationQueue { readonly entries: Escalation[]; }
+interface RemediationAdvice { readonly instruction: string; readonly suggestion: string; }
+
+3.8 TYPE-ONLY EXPORTS (re-exported from src/types.ts, no runtime value)
+-----------------------------------------------------------------------
+Severity, PatchStrategy, RuleId, FolderId, Rule, ModelRef, Artifact, Finding,
+SeverityCounts, ScanOptions, ScanReport, TaskPriority, RemediationTask,
+EnqueueReceipt, BusTaskOutcome, TaskBus, ArtifactStore, EscalationReason,
+EscalationQueue, Escalation, Advisory, RemediationDeps, RemediationOptions,
+RescanSource, RemediationResult, StubTaskBusOptions, StubDepsOptions,
+StubTaskBus, StubArtifactStore, StubEscalationQueue, RemediationAdvice.
+
+4. EXPECTS FROM OTHERS
+======================
+UNKNOWN FOLDER NUMBER — see §8.2. folder-08 is forbidden from importing
+across folder boundaries, so the owning folder numbers of these three
+collaborators are not discoverable from inside folder-08. The integrator must
+map each interface below to the folder that actually owns it and write a thin
+adapter. Only the three shapes below are required; anything else those folders
+expose is ignored by folder-08.
+
+4.1 FROM the task-bus / worker-pool folder — OWNER UNKNOWN
+----------------------------------------------------------
+Stubbed against `TaskBus` in src/types.ts, implemented in src/stubs.ts
+(`createStubTaskBus`). folder-08 uses it for exactly two things:
+  a) `enqueue(RemediationTask) -> EnqueueReceipt`. A rejected task
+     (`accepted === false`) escalates with reason `task-rejected` and consumes
+     no further rounds.
+  b) `awaitSettlement(receipt) -> BusTaskOutcome` (OPTIONAL). When absent,
+     folder-08 re-scans immediately after enqueue and treats everything as
+     unfixed. When present it MUST resolve only after the worker has finished
+     writing the file, otherwise the verification scan reads stale bytes.
+REQUIREMENT ON THE BUS: it must preserve `RemediationTask` objects verbatim
+(the worker applies `patchStrategy`/`suggestion`/`targetPath`/`targetLine`).
+
+4.2 FROM the workspace / COMMONS-IO folder — OWNER UNKNOWN
+-----------------------------------------------------------
+Stubbed against `ArtifactStore` in src/types.ts, implemented in src/stubs.ts
+(`createStubArtifactStore`). folder-08 calls `read(path)` for ONLY the paths it
+just asked to have patched, at most once per (path, rule) per round. The store
+MUST return the current on-disk bytes, and MUST throw CommonsError (or any
+Error) for an unknown path — a throw is escalated as `rescan-unavailable`,
+never fatal.
+
+4.3 FROM the leader / review-queue folder — OWNER UNKNOWN
+----------------------------------------------------------
+Stubbed against `EscalationQueue` in src/types.ts, implemented in
+src/stubs.ts (`createStubEscalationQueue`). folder-08 calls `push(Escalation)`.
+The queue is OPTIONAL: escalations are always returned in
+`RemediationResult.escalations` even when no queue is wired. A rejected push
+promise is swallowed on purpose and does not fail the audit.
+
+4.4 FROM the orchestrator (not a stub — caller-supplied data)
+--------------------------------------------------------------
+`ModelRef[]` for the auditor roster, `Artifact[]` harvested from
+COMMONS/WORKSPACE, and (optionally) a `now()` clock. Nothing else is imported.
+
+5. PROVIDES TO OTHERS
+=====================
+5.1 THE GATE ITSELF — for the orchestrator / lead folder
+    `scanAll(artifacts, auditors)` is the blocking decision input.
+    Use `report.findings` + `gateBlocked(findings)` to decide whether the crew's
+    build may proceed. Write `findings` to COMMONS/DELTA and `bySeverity` to
+    COMMONS/STATE/digest.md.
+5.2 REMEDIATION TASKS — for the task-bus / worker-pool folder
+    `remediateFindings(...)` emits `kind: 'security-remediation'` tasks. The
+    worker pool picks them up like any other task; dispatch on `kind`, order by
+    `priority` (0 = critical) then `round`.
+5.3 ESCALATIONS — for the leader / review-queue folder
+    `kind: 'security-escalation'` entries with a machine-readable `reason`
+    (see 3.6) so the leader can triage without re-reading the evidence.
+5.4 THE RULESET — for anyone extending the gate
+    Import `RULES`, `Rule`, `RULE_IDS` to add rules or narrow `detectors` per
+    auditor model. New ids MUST continue at `SEC-008` and MUST NOT renumber
+    SEC-001..007.
+5.5 `escapeHtml` — for the worker models applying an `escape` patch. Reusing
+    folder-08's definition guarantees the fix matches what the auditor reasoned
+    about; a divergent re-implementation silently defeats the gate.
+5.6 `findingId` — for the Compactor and for anyone merging findings across runs
+    or across folders. It is a pure function of (ruleId, path, line), so the
+    same defect always carries the same id without coordination.
+5.7 NOTHING ELSE. folder-08 writes no files, reads no files, and performs no
+    network or process-spawning I/O of its own. Every side effect goes through
+    the three interfaces in §4.
+
+6. CONFIG
+=========
+There are NO environment variables and NO configuration files. folder-08 reads
+no `process.env`, no CLI flags and no config file. All behaviour is passed per
+call through `ScanOptions` / `RemediationOptions` / `RemediationDeps`, so two
+gates can run side by side with different rulesets.
+
+The only "keys" folder-08 owns are string constants on the public surface:
+
+| key / constant                   | type                | default      | purpose |
+|----------------------------------|---------------------|--------------|---------|
+| MAX_HITS_PER_RULE_PER_FILE       | 3                   | 3            | hard per-file per-rule cap; overridable downward via ScanOptions, clamped to [1,50] |
+| DEFAULT_MIN_AUDITORS             | 2                   | 2            | gate quorum; scanAll throws E_INSUFFICIENT_AUDITORS below it |
+| EVIDENCE_MAX_LENGTH              | 240                 | 240          | evidence truncation, keeps COMMONS readable |
+| MAX_REMEDIATION_ROUNDS           | 2                   | 2            | remediation rounds; options.maxRounds is clamped to [0,2], it can never exceed 2 |
+| SECRET_MIN_LENGTH                | 8                   | 8            | minimum secret literal length that counts (SEC-004) |
+| FILE_LEVEL_EVIDENCE              | '[file-level match]'| same         | evidence for a fileTest hit that cannot be located on a line |
+| FOLDER_ID                        | 'folder-08'         | n/a          | stamped on every error, task and escalation |
+
+CommonsError codes folder-08 can throw (the complete list):
+E_INVALID_INPUT, E_INVALID_AUDITOR, E_INSUFFICIENT_AUDITORS, E_INVALID_ARTIFACT,
+E_EMPTY_RULESET, E_UNKNOWN_RULE, E_MISSING_DEP, E_INVALID_FINDING,
+E_BUS_FAILURE, E_NO_PATCH_STRATEGY, E_ESCALATION_FAILED, E_ARTIFACT_NOT_FOUND
+(stub store only). All carry `folder: 'folder-08'`.
+
+7. RUN STANDALONE
+=================
+Requires Node >= 20.11 and npm. From this directory:
+
+  npm install          # 3 packages: typescript, @types/node, undici-types
+  npm run build        # tsc -p tsconfig.json  (strict)
+  npm test             # pretest rebuilds, then node --test "dist/test/*.test.js"
+
+Expected output of `npm run build`: no output, exit code 0.
+
+Expected tail of `npm test`:
+  1..29
+  # tests 145
+  # suites 29
+  # pass 145
+  # fail 0
+  # cancelled 0
+  # skipped 0
+  # todo 0
+  # duration_ms <varies>
+  exit code 0
+
+Other useful commands:
+  npm run typecheck    # tsc --noEmit
+  npm run smoke        # node --test "dist/test/smoke.test.js"  (48 tests)
+  npm run verify       # build && test
+  npm run clean        # rm -rf dist
+
+If `node --test` reports `Cannot find module .../dist/test`, the shell stripped
+the quotes from the glob. Run the quoted form directly:
+  node --test "dist/test/*.test.js"
+
+Minimal integration snippet:
+
+  import { scanAll, remediateFindings, gateBlocked } from './src/index.js';
+  const report = scanAll(artifacts, auditors);            // auditors.length >= 2
+  const result  = await remediateFindings(report.findings, { bus, artifacts, escalations });
+  if (gateBlocked([...result.unresolved])) { /* hold the build */ }
+
+8. INTEGRATION NOTES
+====================
+8.1 `Rule.locateFile` is an additive extension I added. The briefed
+    `fileTest` returns only a boolean and therefore cannot say WHERE it
+    matched. `locateFile(fileContent) => number[]` returns 1-based lines for
+    that attribution. Where a `fileTest` rule has no `locateFile`, the finding
+    is reported at line 1 with `evidence: '[file-level match]'` — this is
+    covered by a test, not an accident. Both shipped `fileTest` rules (SEC-004
+    PEM keys, SEC-007 split comparisons) do provide `locateFile`.
+8.2 FOLDER NUMBERING IS UNRESOLVED for the three interfaces in §4. I could not
+    discover the owning folder numbers: no cross-folder imports are permitted
+    and the other folders are invisible from here. Default assumption if the
+    integrator has no better information: the task bus / worker pool and the
+    artifact store live in the same folder as the crew orchestration, and the
+    escalation queue is owned by the leader/planner folder. Verify before
+    wiring. This is the single largest open item in this delivery.
+8.3 RESOLUTION SEMANTICS. A finding is `resolved` iff re-scanning its file for
+    its rule yields ZERO hits. It is NOT "the hit on line N is gone", because
+    patching shifts line numbers and per-line matching would report false
+    successes. Consequently a file with two hits on one line keeps that finding
+    open; a worker that moves the defect to a different line does not fool the
+    gate.
+8.4 CRITICAL/HIGH WITHOUT A STRATEGY ARE ESCALATED, NOT IGNORED. SEC-001,
+    SEC-003 and SEC-007 have no `patchStrategy`, so `remediateFindings`
+    escalates them immediately with `reason: 'no-patch-strategy'` and
+    `rounds: 0` — no task, no round spent. They are deliberately NOT
+    advisories: an `eval()` must never pass the gate silently.
+8.5 `unresolved` MEANS "still a blocking defect". It contains every unresolved
+    critical/high input finding, including those escalated for a missing
+    strategy and those whose task was rejected/failed. Use
+    `gateBlocked(result.unresolved)` as the gate verdict.
+8.6 ALL RULES DEFAULT TO `detectors: ['any']`, so every auditor applies the
+    whole ruleset. Auditor ids are assigned at runtime by the orchestrator and
+    are unknowable at build time; hard-coding ids here would silently disable
+    rules. To give each auditor its own subset, spread `RULES` and narrow
+    `detectors`, then pass the array as `ScanOptions.rules` (tested).
+8.7 ATTRIBUTION AND THE THREE-HIT CAP INTERACT. Dedup keeps the FIRST
+    auditor's id; later auditors only raise `auditorCount`. Once a (rule, path)
+    pair reaches the cap, further hits for that pair are dropped entirely and
+    are NOT counted as corroboration. `ScanReport.corroborated` is therefore a
+    lower bound on true agreement.
+8.8 AUDIT-ONLY, NO WRITES. folder-08 never modifies an artifact. Remediating is
+    a bus task; `stubPatchers` in src/stubs.ts are deliberately naive one-line
+    fixers that exist only to prove the loop converges in tests. Do not ship
+    them as a fix engine.
+8.9 `zod` IS NOT USED. The brief permits zod as the only runtime dependency;
+    folder-08 takes zero runtime dependencies instead, because validation here
+    is six field checks and an offline integrator should be able to build and
+    test without a registry. Nothing in §3 requires zod.
+8.10 FALSE-POSITIVE POSTURE IS DELIBERATELY ADVERSARIAL — the gate over-reports
+    rather than under-reports, because a finding costs one worker round while a
+    miss costs a breach. Known looser edges, all test-pinned: SEC-002 flags
+    `el.innerHTML = render(x)` (any non-literal right-hand side); SEC-003 flags
+    any line containing a SQL verb plus concatenation plus a quote/context;
+    SEC-004 flags secret-shaped names anywhere on a line (including
+    `secretKeeper = "..."`); SEC-005 flags every non-loopback http:// including
+    internal networks. Comment-only lines are excluded from every rule, which is
+    the single biggest noise reducer.
+8.11 EVIDENCE IS TRUNCATED at 240 chars and whitespace-collapsed. Long minified
+    or generated files should be excluded via `ScanOptions.excludePaths` rather
+    than trusted.
+8.12 `ModelRef.role`, `ModelRef.name` and `ModelRef.provider` are accepted but
+    unused by folder-08; only `id` matters. `ModelRef` is accepted as a bare
+    string in every function that takes auditors, which keeps call sites short.
+8.13 The stubs in src/stubs.ts throw CommonsError themselves (E_INVALID_ARTIFACT,
+    E_ARTIFACT_NOT_FOUND). When replacing them with real adapters, preserve that
+    behaviour: the remediation loop relies on a throwing store read to escalate
+    `rescan-unavailable` instead of crashing the audit.
+8.14 Tests live in `test/` and compile to `dist/test/`. `npm test` runs
+    `pretest` (a full rebuild) first, so a stale `dist/` can never mask a
+    compile error.
+
+9. DO NOT CHANGE
+================
+9.1 The `Rule.test` / `Rule.fileTest` purity contract. They MUST stay pure
+    (no state, no clock, no I/O) and MUST NOT be written with a `/g` or `/y`
+    flag used through `.test()`/`.exec()` — `lastIndex` would make the second
+    auditor disagree with the first. Non-global regexes only.
+9.2 Rule ids SEC-001..SEC-007, their severities and their declaration order.
+    Ids are already persisted to COMMONS and to bus payloads; renumbering
+    invalidates history. New rules start at SEC-008 and go at the end.
+9.3 The dedupe key `(ruleId, path, line)` and first-detector attribution.
+    Changing either changes what "two models caught the same bug" means, which
+    is the gate's core signal.
+9.4 The three-hits-per-rule-per-file cap. Without it one bad generated file can
+    flood the bus and starve the crew.
+9.5 The two-round ceiling on remediation and the escalation-after-exhaustion
+    behaviour. It is the bound that stops a patch/re-scan war.
+9.6 Resolution = zero remaining hits for (file, rule) after re-scan. See §8.3.
+9.7 `findingId` = `FND-<12 hex>` over (ruleId, path, line). Any other derivation
+    breaks cross-run dedupe in COMMONS and between folders.
+9.8 `CommonsError` shape and `folder: 'folder-08'`, and the rule that folder-08
+    throws nothing else. Consumers filter on `folder` and `code`.
+9.9 The three interfaces in §4.5. Adapters are welcome; changing the shapes is
+    not, because folder-08's verification loop depends on their exact timing
+    semantics (see §4.1b).
+9.10 `RemediationTask.kind === 'security-remediation'` and
+    `Escalation.kind === 'security-escalation'`. The worker pool and the leader
+    dispatch on these strings.

@@ -1,0 +1,209 @@
+{
+  "audit": "ruic-control-deck",
+  "checks": [
+    {
+      "area": "webPreferences",
+      "check": "main window contextIsolation:true",
+      "pass": true,
+      "detail": "app/src/main/index.ts",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "webPreferences",
+      "check": "main window nodeIntegration:false",
+      "pass": true,
+      "detail": "app/src/main/index.ts",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "webPreferences",
+      "check": "main window sandbox:true",
+      "pass": true,
+      "detail": "app/src/main/index.ts (hardened this audit)",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "webPreferences",
+      "check": "preview sandbox+CI+no-node+webSecurity",
+      "pass": true,
+      "detail": "app/src/main/preview-host.ts",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "webPreferences",
+      "check": "no unsafe webPreferences flags anywhere",
+      "pass": true,
+      "detail": "clean",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "preload",
+      "check": "bridge uses fixed channel constants (no dynamic names)",
+      "pass": true,
+      "detail": "app/src/preload/bridge.ts",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "preload",
+      "check": "preload exposes exactly one global, no node/fs/env",
+      "pass": true,
+      "detail": "app/src/preload/index.ts \u2014 no fs/child_process/os/path/process require",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "ipc",
+      "check": "exactly three allowlisted channels installed",
+      "pass": true,
+      "detail": "deck:invoke (handle) + deck:events:replay (on) + deck:events:batch (send); nothing else",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "ipc",
+      "check": "unknown invoke commands rejected explicitly",
+      "pass": true,
+      "detail": "deck-host.ts: default case returns ok:false (added this audit)",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "guards",
+      "check": "main window: will-navigate blocked for non-file URLs",
+      "pass": true,
+      "detail": "app/src/main/index.ts (added this audit)",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "guards",
+      "check": "main window: window.open denied",
+      "pass": true,
+      "detail": "app/src/main/index.ts (added this audit)",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "guards",
+      "check": "main window: permission requests denied by default",
+      "pass": true,
+      "detail": "app/src/main/index.ts (added this audit)",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "guards",
+      "check": "preview: navigation/redirect/webview/window-open all blocked",
+      "pass": true,
+      "detail": "app/src/main/preview-host.ts",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "csp",
+      "check": "renderer CSP present",
+      "pass": true,
+      "detail": "default-src 'self' file:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "csp",
+      "check": "no unsafe-inline/unsafe-eval for scripts",
+      "pass": true,
+      "detail": "script-src free of unsafe-* directives",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "remote-content",
+      "check": "no remote URL is ever loadURL-ed in main",
+      "pass": true,
+      "detail": "preview-host.ts: fileUrl",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "traversal",
+      "check": "preview request filter decodes + resolves before prefix check",
+      "pass": true,
+      "detail": "preview-host.ts (hardened this audit: raw startsWith admitted ..%2F)",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "traversal",
+      "check": "preview entry must be listed, HTML, resolve inside outputDir",
+      "pass": true,
+      "detail": "preview-host.ts open()",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "containment",
+      "check": "preview session cancels non-outputDir requests + denies permissions",
+      "pass": true,
+      "detail": "dedicated session.fromPartition per preview instance",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "secrets",
+      "check": "no secrets/env in renderer or preload",
+      "pass": true,
+      "detail": "clean",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "external",
+      "check": "no shell.openExternal usage",
+      "pass": true,
+      "detail": "none",
+      "verdict": "confirmed",
+      "severity": null
+    },
+    {
+      "area": "supply-chain",
+      "check": "npm audit (prod deps): no high/critical",
+      "pass": true,
+      "detail": "total vulnerabilities: 0",
+      "verdict": "confirmed",
+      "severity": null
+    }
+  ],
+  "fixed_during_audit": [
+    [
+      "MEDIUM",
+      "preview-host: session request filter used a raw URL prefix check",
+      "A percent-encoded escape (..%2F) in a subresource URL passes a raw startsWith check while resolving outside the output directory after decoding. Fixed: the filter now decodes (fileURLToPath), resolves dot segments (path.resolve) and compares against the resolved root; any parse failure fails closed (cancel)."
+    ],
+    [
+      "LOW",
+      "main window had no navigation/window-open/permission guards",
+      "The renderer is local and CSP-restricted, so reachability was unproven (hardening note per anchors) \u2014 hardened anyway: will-navigate blocked for non-file URLs, window.open denied, permission requests denied by default."
+    ],
+    [
+      "LOW",
+      "main window ran with sandbox:false",
+      "The preload only uses contextBridge + ipcRenderer (both available to sandboxed preloads), so the full Chromium sandbox can stay on. Flipped to sandbox:true."
+    ],
+    [
+      "LOW",
+      "unknown invoke command types fell out of the switch",
+      "An unrecognized command.type returned an undefined response shape. Fixed: default case returns {ok:false, error:\"unknown command: \u2026\"}."
+    ]
+  ],
+  "hardening_notes": [
+    "No auto-updater is configured: there is no update feed to attack, but release hardening (code signing, asar integrity, Electron fuses: runAsNode/nodeCliInspect off) must be added before any packaged distribution.",
+    "The renderer loads only local files and the CSP blocks remote scripts; keep it that way \u2014 remote content must only ever appear inside the sandboxed preview.",
+    "IPC payloads are trusted from our own renderer today; if the renderer ever renders attacker-supplied text into command payloads, add schema validation (zod/ajv) at the ipc.ts boundary."
+  ],
+  "blocking": 0
+}

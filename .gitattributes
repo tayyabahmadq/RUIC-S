@@ -1,0 +1,12 @@
+# Normalize all text to LF on checkout and commit — keeps diffs clean
+# across Linux/macOS/Windows contributors.
+* text=auto eol=lf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.exe binary

@@ -1,0 +1,301 @@
+=== OPUS//DECK · parts/folder-03 · COMMONS CORE (shared memory directory) ===
+
+1. WHAT I BUILT
+folder-03 is the COMMONS core: the single source of truth for shared
+memory — one directory of plain, human-inspectable files. It provides
+storage and exactly six operations (read, write, decide, sync, who,
+search) behind openCommons(memoryDir). It owns NO policies: routing,
+compaction, claim lifetime and locking strategy belong to other folders.
+Every write is appended to DELTA/txn.jsonl first, then applied to its
+target atomically (temp file + rename); conflicting writes are queued in
+the log with status "blocked" instead of being dropped. DECISIONS.log is
+append-only JSONL; STATE/digest.md is created, stored and served but
+never rewritten by this folder.
+
+2. FILE MAP
+- package.json — package manifest; scripts: build (tsc), test (build + node --test). Zero runtime deps; devDeps: typescript, @types/node.
+- tsconfig.json — strict TypeScript, NodeNext ESM, rootDir src, outDir dist, target ES2022.
+- src/index.ts — public API: re-exports openCommons, COMMONS_PATHS, CommonsError, ERROR_CODES and all types.
+- src/types.ts — all public types (Commons, Delta, Diff, WriteRequest, DecisionRequest, DecisionEntry, ReadRange, PresenceEntry, SearchHit, TxnId, DecisionId, TxnStatus, PresenceStatus), CommonsError, ERROR_CODES.
+- src/commons.ts — openCommons() implementation, COMMONS_PATHS constants, JSONL validation, claims engine, recovery.
+- src/stubs.ts — working stubs for the two cross-folder contracts (folder-01 path constants, folder-02 lock seam). No runtime dependency on siblings.
+- src/test/commons.test.ts — 12 node:test smoke tests, at least one per public export (compiled to dist/test/commons.test.js).
+- INTEGRATION.txt — this file.
+
+3. PUBLIC INTERFACE
+All of the following are named exports from src/index.ts (package main: dist/index.js).
+
+  export async function openCommons(memoryDir: string): Promise<Commons>
+
+  export interface Commons {
+    read(path: string, range?: ReadRange): Promise<string>;
+    write(args: WriteRequest): Promise<TxnId>;
+    decide(args: DecisionRequest): Promise<DecisionId>;
+    sync(since?: TxnId): Promise<Delta[]>;
+    who(): Promise<PresenceEntry[]>;
+    search(query: string): Promise<SearchHit[]>;
+  }
+
+  export type TxnId = string;            // format "txn-%06d", e.g. "txn-000001"
+  export type DecisionId = string;       // format "dec-%06d", e.g. "dec-000001"
+  export type TxnStatus = 'applied' | 'blocked';
+  export type PresenceStatus = 'active' | 'idle' | 'gone';
+
+  export interface Diff {
+    added: string[];          // single lines only; no "\n" or "\r" in any element
+    removedLineCount: number; // integer >= 0
+    atLine: number;           // 1-based; removal starts here; `added` inserted before original line atLine; may be lineCount+1 to append
+  }
+  export interface WriteRequest {
+    path: string;             // relative to memoryDir, e.g. "WORKSPACE/src/a.ts"; no absolute paths, no ".."
+    diff: Diff;
+    intent: string;           // one-line human summary (may be "")
+    author: string;           // non-empty model id
+    claims?: string[];        // optional paths this author claims once applied (deduped)
+  }
+  export interface Delta {    // one DELTA/txn.jsonl record, returned verbatim by sync()
+    txn: TxnId;
+    ts: string;               // ISO-8601
+    path: string;
+    intent: string;
+    author: string;
+    status: TxnStatus;
+    diff: Diff;
+    claims?: string[];
+  }
+  export interface DecisionRequest { summary: string; rationale: string; author: string; }
+  export interface DecisionEntry {  // one DECISIONS.log record
+    id: DecisionId;
+    ts: string;               // ISO-8601
+    summary: string;
+    rationale: string;
+    author: string;
+  }
+  export interface ReadRange { fromLine: number; toLine: number; } // 1-based, inclusive
+  export interface PresenceEntry { model: string; role: string; since: string; lastSeen: string; status: PresenceStatus; }
+  export interface SearchHit { path: string; line: number; snippet: string; }
+
+  export class CommonsError extends Error {
+    readonly code: CommonsErrorCode;
+    readonly folder = 'folder-03' as const;
+    readonly detail?: string;
+  }
+  export const ERROR_CODES = {
+    OPEN_INVALID_DIR: 'COMMONS_OPEN_INVALID_DIR',
+    PATH_EMPTY: 'COMMONS_PATH_EMPTY',
+    PATH_ESCAPE: 'COMMONS_PATH_ESCAPE',
+    READ_NOT_FOUND: 'COMMONS_READ_NOT_FOUND',
+    READ_NOT_A_FILE: 'COMMONS_READ_NOT_A_FILE',
+    TARGET_IS_DIRECTORY: 'COMMONS_TARGET_IS_DIRECTORY',
+    READ_RANGE_INVALID: 'COMMONS_READ_RANGE_INVALID',
+    WRITE_INVALID: 'COMMONS_WRITE_INVALID',
+    DIFF_OUT_OF_RANGE: 'COMMONS_DIFF_OUT_OF_RANGE',
+    TXN_APPLY_FAILED: 'COMMONS_TXN_APPLY_FAILED',
+    DECIDE_INVALID: 'COMMONS_DECIDE_INVALID',
+    SYNC_UNKNOWN_SINCE: 'COMMONS_SYNC_UNKNOWN_SINCE',
+    PRESENCE_CORRUPT: 'COMMONS_PRESENCE_CORRUPT',
+  } as const;
+  export type CommonsErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
+
+  export const COMMONS_PATHS = {
+    BRIEF: 'BRIEF.md',
+    DECISIONS: 'DECISIONS.log',
+    DIGEST: 'STATE/digest.md',
+    PRESENCE: 'STATE/presence.json',
+    TASKS: 'STATE/tasks.json',
+    WORKSPACE: 'WORKSPACE',
+    DELTA: 'DELTA',
+    ARCHIVE: 'ARCHIVE',
+    TXN_LOG: 'DELTA/txn.jsonl',
+  } as const;
+  export type CommonsPaths = typeof COMMONS_PATHS;
+
+  Stubs (src/stubs.ts, not re-exported from index.ts):
+  export function stubPathConstants(): Record<string, string>
+  export interface CommonsLockStub { acquire(): Promise<void>; release(): Promise<void>; }
+  export function stubCommonsLock(): CommonsLockStub
+
+--- JSONL SCHEMAS (parsed by folders 04, 05, 06) ---
+
+DELTA/txn.jsonl — one compact JSON object per line, UTF-8, LF-terminated.
+Field order below is what folder-03 writes; parsers must not depend on it.
+  {
+    "txn": "txn-000001",            // string, /^txn-\d{6}$/, unique, monotonic
+    "ts": "2026-10-17T00:00:00.000Z", // string, ISO-8601
+    "path": "WORKSPACE/src/a.ts",   // string, non-empty, relative, no leading "/", no ".."
+    "intent": "add retry logic",    // string (may be "")
+    "author": "model-alpha",        // string, non-empty
+    "status": "applied",            // "applied" | "blocked"
+    "diff": {
+      "added": ["line a", "line b"],// array of strings, each a single line (no \n, \r)
+      "removedLineCount": 1,        // integer >= 0
+      "atLine": 42                  // integer >= 1
+    },
+    "claims": ["WORKSPACE/src/a.ts"]// optional array of strings; absent = no claims
+  }
+Unknown extra fields may appear; parsers must tolerate and ignore them.
+Malformed lines (bad JSON, wrong types, bad id format) are skipped by
+folder-03 on read; they must not crash downstream parsers either.
+
+DECISIONS.log — one compact JSON object per line, UTF-8, LF-terminated,
+append-only (never rewritten, never deleted by folder-03):
+  {
+    "id": "dec-000001",             // string, /^dec-\d{6}$/, unique, monotonic
+    "ts": "2026-10-17T00:00:00.000Z", // string, ISO-8601
+    "summary": "use zod for validation", // string
+    "rationale": "boundary parsing needs schemas", // string
+    "author": "lead"                // string, non-empty
+  }
+
+STATE/presence.json — pretty-printed JSON object (written by folder-01 /
+the orchestrator; folder-03 only reads and serves it):
+  {
+    "updated": "2026-10-17T00:00:00.000Z",
+    "entries": [
+      {
+        "model": "model-alpha",       // string, non-empty (required)
+        "role": "engineer",           // string (optional, served as "" if absent)
+        "since": "2026-10-17T00:00:00.000Z", // string (optional, served as "" if absent)
+        "lastSeen": "2026-10-17T01:00:00.000Z", // string (required)
+        "status": "active"            // "active" | "idle" | "gone" (required)
+      }
+    ]
+  }
+
+4. EXPECTS FROM OTHERS
+- folder-01 (lead/planner): a path-constants export whose values match
+  COMMONS_PATHS byte-for-byte — directory entries "WORKSPACE", "DELTA",
+  "ARCHIVE" with NO trailing slash; file entries as full relative paths
+  such as "DELTA/txn.jsonl". folder-03 does NOT import it; the
+  local COMMONS_PATHS in src/commons.ts is authoritative. Stub:
+  stubPathConstants() in src/stubs.ts. folder-01 also owns writing
+  STATE/presence.json (schema above) and BRIEF.md content.
+- folder-02 (locking policy): none required. folder-03 performs no
+  internal locking; callers must serialize Commons operations per
+  memory directory. Seam documented as CommonsLockStub in src/stubs.ts
+  (stubCommonsLock() is a working no-op).
+- folder-04 (compactor): consumes DELTA/txn.jsonl (schema above) to
+  learn what models missed; owns rewriting STATE/digest.md and any
+  compaction/archival of DELTA into ARCHIVE. folder-03 never
+  rewrites digest.md and never compacts.
+- folders 05/06 (and any other consumer): parse DELTA/txn.jsonl and
+  DECISIONS.log exactly per the schemas in section 3.
+
+5. PROVIDES TO OTHERS
+- openCommons(memoryDir) + the Commons interface (section 3): the only
+  way models should touch shared memory — gives them atomic writes,
+  replay (sync), presence and search without touching fs directly.
+- COMMONS_PATHS — exact canonical values others should import/re-export:
+    BRIEF        = "BRIEF.md"
+    DECISIONS    = "DECISIONS.log"
+    DIGEST       = "STATE/digest.md"
+    PRESENCE     = "STATE/presence.json"
+    TASKS        = "STATE/tasks.json"
+    WORKSPACE    = "WORKSPACE"      (directory, no trailing slash)
+    DELTA        = "DELTA"          (directory, no trailing slash)
+    ARCHIVE      = "ARCHIVE"        (directory, no trailing slash)
+    TXN_LOG      = "DELTA/txn.jsonl"
+- DELTA/txn.jsonl: the replayable transaction log (applied + blocked).
+  folder-04 reads it to build/serve digest.md; folders 05/06 read it to
+  reconstruct model activity. Blocked entries are the conflict queue.
+- DECISIONS.log: the append-only decision ledger for audit.
+- CommonsError + ERROR_CODES: uniform failure signaling across the deck.
+
+6. CONFIG
+folder-03 reads NO environment variables and NO config keys. All
+tunables are code constants in src/commons.ts:
+- SEARCH_MAX_HITS = 1000 (number) — max results returned by search().
+- SEARCH_SNIPPET_MAX = 200 (number) — max chars per search snippet.
+- TxnId/DecisionId zero-padding = 6 (id format "txn-%06d" / "dec-%06d").
+- Initial file contents (created only when missing):
+  BRIEF.md = "# Brief\n"; DECISIONS.log = "" (empty);
+  STATE/digest.md = "# Digest\n\nOwned by the compactor (folder-04). folder-03 never rewrites this file.\n";
+  STATE/presence.json = pretty { "updated": <ISO now>, "entries": [] };
+  STATE/tasks.json = pretty { "tasks": [] }; DELTA/txn.jsonl = "" (empty).
+
+7. RUN STANDALONE
+  cd parts/folder-03
+  npm install
+  npm run build
+  npm test
+Expected:
+- npm install: "added 3 packages" (typescript, @types/node, + bundled), exit 0.
+- npm run build: tsc strict, no output, exit 0; emits dist/index.js, dist/index.d.ts, dist/commons.js, dist/types.js, dist/stubs.js, dist/test/commons.test.js (+ .d.ts).
+- npm test: builds, then runs node --test dist/test/commons.test.js —
+  "tests 12 / pass 12 / fail 0", exit 0.
+Node >= 20 required (developed and verified on Node v24.20.0, Windows).
+Zero runtime dependencies; zod is NOT used (validation is hand-rolled
+and strict, so the package installs with an empty dependency set).
+
+8. INTEGRATION NOTES
+- write() pipeline order: (1) shape validation (malformed requests throw
+  COMMONS_WRITE_INVALID and never reach the log); (2) claims gate;
+  (3) target read + range validation (COMMONS_DIFF_OUT_OF_RANGE);
+  (4) append txn to DELTA/txn.jsonl; (5) atomic apply (temp file in the
+  same directory, then rename). Because the claims gate runs before
+  range validation, a conflicting write is queued as "blocked" even if
+  its diff would be out of range; blocked entries echo the diff verbatim.
+- Claims rule (deterministic, derived only from DELTA/txn.jsonl): an
+  APPLIED txn that lists path P in its claims sets claimer[P]=author;
+  an APPLIED txn whose own path is P and whose claims do NOT list P
+  releases P; BLOCKED txns never create/transfer/release claims. No TTL
+  — claim lifetime policy is folder-02's. Consequence: the holder can
+  always write; a non-holder is blocked until the holder releases by
+  writing the same path without listing it in claims.
+- Blocked txns stay in DELTA/txn.jsonl forever (COMMONS is unbounded;
+  nothing is ever deleted). sync() returns them so folders 04/05/06 can
+  see the conflict queue. Retry/release policy is NOT folder-03's.
+- sync(since) is EXCLUSIVE of `since` and returns entries in log order;
+  an unknown or malformed `since` throws COMMONS_SYNC_UNKNOWN_SINCE.
+  sync() reads only DELTA/txn.jsonl — if folder-04 archives entries
+  elsewhere, sync() will not see them (hand SYNC_UNKNOWN_SINCE).
+- Recovery: on open, a trailing partial line (crash mid-append, no
+  final newline) in DELTA/txn.jsonl or DECISIONS.log is truncated back
+  to the last complete line. Idempotent: re-opening never clobbers.
+- No internal locking: two writers on one memory directory must be
+  serialized by folder-02's lock. Within one process, JS asynchrony
+  between the claims read and the append can still interleave two
+  write() calls — callers must await each write before the next.
+- Applied writes normalize the target file to end with a trailing "\n"
+  (empty file stays empty). Whole-file read() is byte-exact (no
+  normalization). Range read() returns selected lines joined by "\n"
+  with no synthesized trailing newline; toLine clamps to EOF; fromLine
+  beyond EOF returns ""; fromLine < 1 or toLine < fromLine throws
+  COMMONS_READ_RANGE_INVALID.
+- search() scope: WORKSPACE recursively only (not DELTA, STATE,
+  DECISIONS.log, BRIEF.md). Case-insensitive substring match; hidden
+  files (dot-prefixed, incl. .tmp scratch) skipped; entries visited in
+  sorted order; results capped at 1000; snippet = matched line trimmed
+  to 200 chars; paths use forward slashes relative to memoryDir.
+  Empty/whitespace query returns [] (no throw).
+- write() may target ANY path inside memoryDir (not just paths under
+  WORKSPACE), including STATE/digest.md — but folder-03 itself never rewrites
+  digest.md; only an explicit caller (e.g. folder-04) may. Paths
+  outside memoryDir, absolute paths, and ".." escapes throw
+  COMMONS_PATH_ESCAPE / COMMONS_PATH_EMPTY.
+- DECISIONS.log is append-only; folder-03 never rewrites or deletes it.
+  STATE/tasks.json shape/lifecycle is owned by others; folder-03 only
+  creates the initial { "tasks": [] }.
+- If append succeeds but the atomic apply fails, the txn is already in
+  the log and folder-03 throws COMMONS_TXN_APPLY_FAILED with the txn id
+  in detail — reconciliation is the caller's policy.
+- Malformed JSONL lines are skipped on read (never fatal); unknown
+  extra fields are tolerated. Forward-compatible by design.
+
+9. DO NOT CHANGE
+- The six Commons operations and their exact signatures (section 3);
+  openCommons(memoryDir) is the only constructor.
+- COMMONS_PATHS values byte-for-byte — directory entries "WORKSPACE",
+  "DELTA", "ARCHIVE" with no trailing slash; file entries as full
+  relative paths such as "DELTA/txn.jsonl" (section 5).
+- TxnId/DecisionId formats ("txn-%06d" / "dec-%06d") and the DELTA /
+  DECISIONS JSONL field names, types and semantics (section 3).
+- CommonsError shape: extends Error, carries code (ERROR_CODES),
+  folder === 'folder-03', optional detail; name === 'CommonsError'.
+- DECISIONS.log append-only; STATE/digest.md owned by folder-04;
+  blocked txns are never deleted from DELTA/txn.jsonl.
+- Atomic apply = temp file in the same directory + rename; the delta
+  log is appended BEFORE the diff is applied.
+- Canonical initial file set created on open: BRIEF.md,
+  DECISIONS.log, STATE/digest.md, STATE/presence.json,
+  STATE/tasks.json, WORKSPACE, DELTA, ARCHIVE, DELTA/txn.jsonl.
