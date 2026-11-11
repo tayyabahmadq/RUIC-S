@@ -1030,9 +1030,14 @@ function renderModelPool(): void {
     rm.style.padding = '0 9px'
     rm.textContent = 'remove'
     rm.addEventListener('click', () => {
-      savePool(loadPool().filter((x) => x.id !== m.id))
-      renderModelPool()
-      renderAssignments()
+      try {
+        savePool(loadPool().filter((x) => x.id !== m.id))
+        renderModelPool()
+        renderAssignments()
+      } catch (err) {
+        console.error('Remove model failed:', err)
+        reportInvokeError('Remove model', err)
+      }
     })
     head.appendChild(rm)
     card.appendChild(head)
@@ -1040,8 +1045,11 @@ function renderModelPool(): void {
     body.className = 'pbody'
     const meta = document.createElement('div')
     meta.style.cssText = 'font:10.5px var(--mono);color:var(--muted);line-height:1.9'
+    const ctx = typeof m.contextWindowTokens === 'number' && Number.isFinite(m.contextWindowTokens)
+      ? m.contextWindowTokens.toLocaleString('en-US')
+      : '—'
     const params = m.paramCountB !== null ? `${m.paramCountB}B params · ` : ''
-    meta.innerHTML = `${m.model}<br>${m.endpoint}<br>ctx ${m.contextWindowTokens.toLocaleString('en-US')} · ${params}${m.free ? '<span class="chip good" style="margin-left:4px">free</span>' : '<span class="chip warn" style="margin-left:4px">paid</span>'}`
+    meta.innerHTML = `${m.model ?? '—'}<br>${m.endpoint ?? '—'}<br>ctx ${ctx} · ${params}${m.free ? '<span class="chip good" style="margin-left:4px">free</span>' : '<span class="chip warn" style="margin-left:4px">paid</span>'}`
     body.appendChild(meta)
     card.appendChild(body)
     pool.appendChild(card)
@@ -1084,9 +1092,14 @@ function renderAssignments(): void {
     sel.value = assignments[seat.key]
     if (sel.value !== assignments[seat.key]) sel.value = 'auto'
     sel.addEventListener('change', () => {
-      const a = loadAssignments()
-      a[seat.key] = sel.value
-      saveAssignments(a)
+      try {
+        const a = loadAssignments()
+        a[seat.key] = sel.value
+        saveAssignments(a)
+      } catch (err) {
+        console.error('Assignment save failed:', err)
+        reportInvokeError('Assignment save', err)
+      }
     })
     card.appendChild(sel)
     grid.appendChild(card)
@@ -1326,25 +1339,30 @@ function mount(): void {
   if (addModelForm !== null) {
     addModelForm.addEventListener('submit', (e) => {
       e.preventDefault()
-      const val = (id: string): string => byId<HTMLInputElement>(id)?.value.trim() ?? ''
-      const id = val('nmId')
-      const model = val('nmModel')
-      const endpoint = val('nmEndpoint')
-      if (id.length === 0 || model.length === 0 || endpoint.length === 0) return
-      const pool = loadPool().filter((m) => m.id !== id)
-      pool.push({
-        id,
-        provider: (byId<HTMLSelectElement>('nmProvider')?.value ?? 'openai-compatible') as PoolModel['provider'],
-        endpoint,
-        model,
-        contextWindowTokens: Number(val('nmCtx')) || 32768,
-        paramCountB: val('nmParams') !== '' ? Number(val('nmParams')) : null,
-        free: byId<HTMLInputElement>('nmFree')?.checked ?? false,
-      })
-      savePool(pool)
-      if (addModelForm !== null) addModelForm.style.display = 'none'
-      renderModelPool()
-      renderAssignments()
+      try {
+        const val = (id: string): string => byId<HTMLInputElement>(id)?.value.trim() ?? ''
+        const id = val('nmId')
+        const model = val('nmModel')
+        const endpoint = val('nmEndpoint')
+        if (id.length === 0 || model.length === 0 || endpoint.length === 0) return
+        const pool = loadPool().filter((m) => m.id !== id)
+        pool.push({
+          id,
+          provider: (byId<HTMLSelectElement>('nmProvider')?.value ?? 'openai-compatible') as PoolModel['provider'],
+          endpoint,
+          model,
+          contextWindowTokens: Number(val('nmCtx')) || 32768,
+          paramCountB: val('nmParams') !== '' ? Number(val('nmParams')) : null,
+          free: byId<HTMLInputElement>('nmFree')?.checked ?? false,
+        })
+        savePool(pool)
+        if (addModelForm !== null) addModelForm.style.display = 'none'
+        renderModelPool()
+        renderAssignments()
+      } catch (err) {
+        console.error('Add model failed:', err)
+        reportInvokeError('Add model', err)
+      }
     })
   }
   const chatForm = byId<HTMLFormElement>('chatForm')
